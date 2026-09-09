@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nemulai-harness"
+version = "0.1.0.dev0"
+description = "Local-first observability and efficiency harness for AI workloads (M1: OpenAI chat.completions, sync, non-streaming)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "openai==2.44.0",
+  "httpx>=0.28",
+  "ruff>=0.6",
+  "mypy>=1.11",
+]
+
+[project.scripts]
+nemulai = "nemulai.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+nemulai = ["schema.sql", "rates/*.json", "_boot/*.py", "py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src/nemulai"]
+ignore_missing_imports = true
