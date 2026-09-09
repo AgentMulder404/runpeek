@@ -32,16 +32,27 @@ perspective default  ·  rates list  ·  cards openai-list@2025-08-01  ·  calc 
 OPERATIONS        8 attempts (8 operations)        adapters: openai.chat.completions.create
   completed 6      provider_error 2      in_progress 0
 
-KNOWN ESTIMATED COST   $0.0138…   list-price estimate, not actual spend   [deduplicated (exact identity only)]
-  priced              5 charges   …
+KNOWN ESTIMATED COST   $0.016052   list-price estimate, not actual spend   [deduplicated (exact identity only)]
+  priced              5 charges   $0.016052
   unpriced            1 charges   model not in rate card: "acme-preview-1" (1)
   no_usage            2 charges   2 errors
   billing         expected 6 · unknown 2 · confirmed 0 · not_billed 0
 
 COVERAGE          usage: exact 6 / missing 0 of 6 completed   ·   pricing: 5 of 6 with usage priced   ·   capture: not measurable
-ATTRIBUTION       by cost: attributed … · job_only … · unattributed … 
+ATTRIBUTION       by cost: attributed 97.8% · job_only 0.0% · unattributed 2.2% ($0.000352)
 
-BY CUSTOMER   …      BY MODEL   …      TELEMETRY   records … · dropped 0 · unflushed at exit 0 · …
+BY CUSTOMER                 ops          cost   share  unmeasured
+  acme                        3      $0.01486   92.6%  
+  globex                      2      $0.00084    5.2%  1
+  (unattributed)              1     $0.000352    2.2%  
+  initech                     2             —       —  2
+
+BY MODEL                    ops     in tok    out tok    cached          cost
+  gpt-4o                      1      2,000        800         0        $0.013
+  gpt-4.1-mini                6      3,200      1,220       600     $0.003052
+  acme-preview-1              1        500        200         0      unpriced
+
+TELEMETRY         records 58 · dropped 0 · unflushed at exit 0 · persist failures 0 · hook failures 0
 ```
 
 Then:
