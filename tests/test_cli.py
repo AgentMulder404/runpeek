@@ -65,6 +65,9 @@ def test_application_signal_death_maps_to_128_plus(tmp_path: Path) -> None:
     r = _run(["run", "--db", str(tmp_path / "n.db"), "--no-summary", "--", sys.executable, "-c",
               "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"], cwd=tmp_path)
     assert r.returncode == 128 + 15
+    import sqlite3
+
+    assert sqlite3.connect(tmp_path / "n.db").execute("SELECT app_exit_status FROM runs").fetchone()[0] == -15
 
 
 def test_uninstrumentable_command_runs_and_warns(tmp_path: Path) -> None:
@@ -108,12 +111,44 @@ def test_crash_leaves_readable_store_and_unclean_run(tmp_path: Path) -> None:
     )
     r = _run(["run", "--db", str(db), "--", sys.executable, "-c", app], cwd=tmp_path)
     assert r.returncode == 9
-    assert "DID NOT END CLEANLY" in r.stdout
+    assert "telemetry: DID NOT END CLEANLY" in r.stdout
+    assert "application exit: 9 (failed)" in r.stdout
+    assert "persisted rows" in r.stdout and "final counters unavailable" in r.stdout
+    assert "records 0" not in r.stdout
+    assert "customer='acme'" not in r.stdout  # the -c program is never displayed
     import sqlite3
 
     conn = sqlite3.connect(db)
     assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert conn.execute("SELECT ended_at FROM runs").fetchone()[0] is None
+
+
+def test_command_description_redacts_code_and_secrets() -> None:
+    from nemulai.cli import describe_command
+
+    assert describe_command(["python", "app.py", "--verbose"]) == "python app.py --verbose"
+    assert describe_command(["python", "-c", "print(open('secret').read())"]) == "python -c <redacted>"
+    described = describe_command(["python", "-m", "pkg.mod", "--api-key=sk-live-123"])
+    assert described == "python -m pkg.mod --api-key=<redacted>"
+    assert describe_command(["tool", "--token", "abc", "run"]) == "tool --token <redacted> run"
+    assert describe_command(["python", "x.py", "two words"]) == "python x.py <redacted>"
+    long = describe_command(["python"] + ["a" * 50] * 10)
+    assert len(long) <= 200 and long.endswith("…")
+
+
+def test_inline_program_is_not_stored_and_statuses_are_separate(tmp_path: Path) -> None:
+    import sqlite3
+
+    db = tmp_path / "n.db"
+    r = _run(["run", "--db", str(db), "--", sys.executable, "-c",
+              "SECRET_PROMPT = 'do not leak me'\nimport sys; sys.exit(2)"], cwd=tmp_path)
+    assert r.returncode == 2
+    assert "SECRET_PROMPT" not in r.stdout
+    assert "application exit: 2 (failed)" in r.stdout and "telemetry: ended cleanly" in r.stdout
+    conn = sqlite3.connect(db)
+    cmd, app_rc = conn.execute("SELECT command, app_exit_status FROM runs").fetchone()
+    assert cmd.endswith("-c <redacted>") and "SECRET_PROMPT" not in cmd
+    assert app_rc == 2
 
 
 @pytest.mark.parametrize("flag", ["--version"])

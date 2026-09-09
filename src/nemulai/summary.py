@@ -53,6 +53,7 @@ class Summary:
     hook_failures: int = 0
     unsupported_events: int = 0
     counters: dict[str, Any] = field(default_factory=dict)
+    persisted_rows: int = 0  # counted from the store, independent of the run's final counters
 
     @property
     def with_usage(self) -> int:
@@ -186,7 +187,46 @@ def build(conn: sqlite3.Connection, run_id: str | None, perspective: Perspective
             "persist_failures": run.get("persist_failures"),
             "records_written": run.get("records_written"),
         }
+        s.persisted_rows = sum(
+            conn.execute(f"SELECT COUNT(*) FROM {t} WHERE run_id = ?", (run_id,)).fetchone()[0]
+            for t in ("spans", "operations", "attempts", "health_events")
+        )
+        s.persisted_rows += conn.execute(
+            "SELECT COUNT(*) FROM source_observations o JOIN attempts a ON a.attempt_id = o.attempt_id"
+            " WHERE a.run_id = ?",
+            (run_id,),
+        ).fetchone()[0]
+        s.persisted_rows += conn.execute(
+            "SELECT COUNT(*) FROM identifiers WHERE subject_id IN ("
+            "  SELECT operation_id FROM operations WHERE run_id = ?"
+            "  UNION SELECT attempt_id FROM attempts WHERE run_id = ?)",
+            (run_id, run_id),
+        ).fetchone()[0]
     return s
+
+
+def _signal_name(num: int) -> str:
+    try:
+        import signal
+
+        return signal.Signals(num).name
+    except (ValueError, ImportError):
+        return f"signal {num}"
+
+
+def _app_status(run: dict[str, Any]) -> str:
+    if "app_exit_status" not in run or run.get("app_exit_status") is None:
+        return "application exit: unknown (not launched by `nemulai run`)"
+    rc = int(run["app_exit_status"])
+    if rc < 0:
+        return f"application: killed by {_signal_name(-rc)}"
+    return f"application exit: {rc}" + ("" if rc == 0 else " (failed)")
+
+
+def _telemetry_status(run: dict[str, Any]) -> str:
+    if run.get("ended_at") and run.get("clean_exit"):
+        return "telemetry: ended cleanly"
+    return "telemetry: DID NOT END CLEANLY (no final record; loss after last heartbeat is unknown)"
 
 
 def _adapter_name(detail_json: str | None) -> str:
@@ -209,12 +249,9 @@ def render(s: Summary) -> str:
     head = f"nemulai · run {s.run_id or 'all runs'}"
     if run.get("command"):
         head += f"  ·  {run['command']}"
-    if run:
-        if run.get("ended_at") and run.get("clean_exit"):
-            head += "  ·  ended cleanly"
-        else:
-            head += "  ·  DID NOT END CLEANLY (no final record; loss after last heartbeat is unknown)"
     L.append(head)
+    if run:
+        L.append(f"{_app_status(run)}  ·  {_telemetry_status(run)}")
     L.append(
         f"perspective {s.perspective.perspective_id}  ·  rates {s.perspective.rates}"
         f"  ·  cards {', '.join(s.rate_cards) or 'none used'}"
@@ -296,15 +333,21 @@ def render(s: Summary) -> str:
     L.append("")
     c = s.counters
     if c:
-        def _n(key: str) -> str:
-            v = c.get(key)
-            return "unknown" if v is None else str(v)
-
-        L.append(
-            f"TELEMETRY         records {c.get('records_written', 0)} · dropped {_n('dropped')}"
-            f" · unflushed at exit {_n('unflushed')} · persist failures {_n('persist_failures')}"
-            f" · hook failures {s.hook_failures}"
-        )
+        clean = bool(run.get("ended_at") and run.get("clean_exit"))
+        if clean:
+            L.append(
+                f"TELEMETRY         records {c.get('records_written', 0)} · dropped {c.get('dropped')}"
+                f" · unflushed at exit {c.get('unflushed')} · persist failures {c.get('persist_failures')}"
+                f" · hook failures {s.hook_failures}"
+            )
+        else:
+            # The run's own counters are written at clean shutdown; after a
+            # crash only what reached the store can be counted.
+            L.append(
+                f"TELEMETRY         persisted rows {s.persisted_rows} (counted from the store)"
+                " · final counters unavailable: dropped / unflushed / persist failures unknown"
+                f" · hook failures persisted {s.hook_failures} (may be incomplete)"
+            )
     if s.attempts == 0:
         L.append("")
         L.append("No AI operations were observed. This does not mean no AI spend occurred —")

@@ -54,6 +54,10 @@ def open_connection(path: str | Path) -> sqlite3.Connection:
 def apply_schema(conn: sqlite3.Connection) -> None:
     sql = (resources.files("nemulai") / "schema.sql").read_text(encoding="utf-8")
     conn.executescript(sql)
+    # Additive columns for stores created by earlier dev builds. Forward-only.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(runs)")}
+    if "app_exit_status" not in cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN app_exit_status INTEGER")
 
 
 def _j(obj: Any) -> str | None:

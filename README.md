@@ -71,6 +71,7 @@ The store is a SQLite file at `./.nemulai/nemulai.db` (override with `--db` or
 
 ```bash
 export OPENAI_API_KEY=…             # your key; the harness never reads or stores it
+nemulai run python examples/real_openai.py   # real-provider smoke test, ~$0.0001
 nemulai run python app.py
 ```
 
@@ -131,9 +132,9 @@ is reported as `billing: unknown`.
 - **Unknown is never zero.** A missing usage block, an unknown model, an error
   or a timeout produce a charge with an unknown or unpriced status, not `$0`.
 - **Rates** come from immutable, dated rate cards. The shipped
-  `openai-list@2025-08-01` is a transcription — verify it against
-  openai.com/pricing before relying on it, or pass your own with `--rate-card
-  file.json`. The card effective at the attempt's start time is used; a
+  `openai-list@2025-08-01` was verified against the official pricing page on
+  2026-09-09 (every listed model matched); prices change, so re-verify before
+  relying on a figure, or pass your own with `--rate-card file.json`. The card effective at the attempt's start time is used; a
   fallback is recorded when none covers it. There is no "latest" default.
 - **Cached and reasoning tokens** are subsets of prompt and completion tokens
   (per the SDK's usage types) and are never charged twice: cost =
@@ -162,6 +163,13 @@ is reported as `billing: unknown`.
 - No prompts, completions, request bodies or credentials are recorded. Source
   observations hold allowlisted usage fields, ids, timing and status only.
 - The application's exit status is preserved; death by signal maps to 128+N.
+  The summary reports **application exit** and **telemetry shutdown** as two
+  separate facts — an app can fail while telemetry ends cleanly, and vice versa.
+- The recorded command line is a redacted description: inline `-c` programs,
+  whitespace-bearing arguments and values of secret-looking options are stored
+  as `<redacted>`, never verbatim.
+- After a crash the run has no final counters; the summary counts what reached
+  the store and says drops/unflushed/persist-failures are unknown.
 
 ## Development
 

@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS runs (
   dropped_confirmed INTEGER,
   unflushed_known   INTEGER,
   persist_failures  INTEGER,
-  harness_version   TEXT
+  harness_version   TEXT,
+  app_exit_status   INTEGER                -- written by `nemulai run` after the child exits; negative = -signal; NULL = unknown
 );
 
 CREATE TABLE IF NOT EXISTS spans (

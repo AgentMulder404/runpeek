@@ -23,6 +23,48 @@ from .store import apply_schema, open_connection
 BOOT_DIR = Path(__file__).parent / "_boot"
 DEFAULT_DB = Path(".nemulai") / "nemulai.db"
 
+_SECRET_FLAG_WORDS = ("key", "token", "secret", "password", "passwd", "credential", "auth")
+_COMMAND_MAX_CHARS = 200
+
+
+def describe_command(argv: list[str]) -> str:
+    """A command description safe to store and display.
+
+    The recorded command is metadata, and metadata can leak: ``python -c
+    "<program>"`` carries source that may embed prompts or secrets, and
+    ``--api-key=...`` carries the secret itself. Rule: keep tokens that look
+    like program names, paths, modules or plain flags; redact inline code,
+    anything multi-line or whitespace-bearing, and values of secret-looking
+    options. Length is capped. This is a description, not a transcript.
+    """
+    out: list[str] = []
+    redact_next = False
+    for tok in argv:
+        if redact_next:
+            out.append("<redacted>")
+            redact_next = False
+            continue
+        if tok == "-c":
+            out.append(tok)
+            redact_next = True
+            continue
+        low = tok.lower()
+        if any(ch.isspace() for ch in tok):
+            out.append("<redacted>")
+            continue
+        if "=" in tok and any(w in low.split("=", 1)[0] for w in _SECRET_FLAG_WORDS):
+            out.append(tok.split("=", 1)[0] + "=<redacted>")
+            continue
+        if low.startswith("--") and any(w in low for w in _SECRET_FLAG_WORDS):
+            out.append(tok)
+            redact_next = True
+            continue
+        out.append(tok)
+    text = " ".join(out)
+    if len(text) > _COMMAND_MAX_CHARS:
+        text = text[: _COMMAND_MAX_CHARS - 1] + "…"
+    return text
+
 
 def _db(args: argparse.Namespace) -> Path:
     return Path(args.db or os.environ.get("NEMULAI_DB") or DEFAULT_DB)
@@ -73,7 +115,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     env["NEMULAI_ENABLED"] = "1"
     env["NEMULAI_DB"] = str(db)
     env["NEMULAI_RUN_ID"] = run_id
-    env["NEMULAI_COMMAND"] = " ".join(cmd)
+    env["NEMULAI_COMMAND"] = describe_command(cmd)
     env["PYTHONPATH"] = str(BOOT_DIR) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
 
     try:
@@ -95,22 +137,26 @@ def cmd_run(args: argparse.Namespace) -> int:
             signal.signal(s, h)
     exit_code = 128 - rc if rc < 0 else rc  # negative rc = killed by signal -rc
 
-    if not args.no_summary:
-        if db.exists():
-            try:
-                conn = open_connection(db)
-                apply_schema(conn)
+    if db.exists():
+        try:
+            conn = open_connection(db)
+            apply_schema(conn)
+            # The application's exit status is a fact the parent knows and the
+            # child cannot record for itself; it is separate from whether the
+            # child's telemetry shut down cleanly.
+            conn.execute("UPDATE runs SET app_exit_status = ? WHERE run_id = ?", (rc, run_id))
+            if not args.no_summary:
                 accounting.run(conn, persp.DEFAULT, _cards(args))
                 print()
                 print(summ.render(summ.build(conn, run_id, persp.DEFAULT)))
-                conn.close()
-            except sqlite3.Error as exc:
-                sys.stderr.write(f"nemulai: could not read store for summary: {exc}\n")
-        else:
-            sys.stderr.write(
-                "nemulai: no store was created. The command may not have started a Python interpreter that "
-                "processes site, or `nemulai` is not importable by that interpreter.\n"
-            )
+            conn.close()
+        except sqlite3.Error as exc:
+            sys.stderr.write(f"nemulai: could not read store for summary: {exc}\n")
+    if not db.exists():
+        sys.stderr.write(
+            "nemulai: no store was created. The command may not have started a Python interpreter that "
+            "processes site, or `nemulai` is not importable by that interpreter.\n"
+        )
     return exit_code
 
 
