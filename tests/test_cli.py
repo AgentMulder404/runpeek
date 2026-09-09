@@ -132,8 +132,38 @@ def test_command_description_redacts_code_and_secrets() -> None:
     assert described == "python -m pkg.mod --api-key=<redacted>"
     assert describe_command(["tool", "--token", "abc", "run"]) == "tool --token <redacted> run"
     assert describe_command(["python", "x.py", "two words"]) == "python x.py <redacted>"
-    long = describe_command(["python"] + ["a" * 50] * 10)
+    long = describe_command(["python"] + [f"./data/part_{i}/input_file.csv" for i in range(12)])
     assert len(long) <= 200 and long.endswith("…")
+
+
+def test_command_description_redacts_urls_positionals_env_and_payloads() -> None:
+    from nemulai.cli import describe_command
+
+    # URL userinfo, query strings and fragments
+    assert describe_command(["curl", "https://user:p4ss@api.example.com/v1/x?token=abc#frag"]) == (
+        "curl https://<redacted>@api.example.com/v1/x?<redacted>"
+    )
+    assert describe_command(["pg_dump", "postgres://admin:secret@db.internal:5432/app"]) == (
+        "pg_dump postgres://<redacted>@db.internal:5432/app"
+    )
+    # positional secrets by prefix and by shape
+    assert describe_command(["tool", "sk-live-abcdefghijklmnop"]) == "tool <redacted>"
+    assert describe_command(["tool", "ghp_" + "x" * 36]) == "tool <redacted>"
+    assert describe_command(["tool", "A" * 40]) == "tool <redacted>"
+    assert describe_command(["tool", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc"]) == "tool <redacted>"
+    # environment-style assignments
+    assert describe_command(["env", "OPENAI_API_KEY=sk-abc", "python", "app.py"]) == (
+        "env OPENAI_API_KEY=<redacted> python app.py"
+    )
+    assert describe_command(["env", "DATABASE_PASSWORD=hunter2", "x"]) == "env DATABASE_PASSWORD=<redacted> x"
+    assert describe_command(["env", "MODE=prod", "x"]) == "env MODE=prod x"  # non-secret assignments survive
+    # tool payloads (JSON / brace arguments) are never stored
+    assert describe_command(["cli", "--data", '{"api_key":"sk-1"}']) == "cli --data <redacted>"
+    assert describe_command(["cli", "[1,2,3]"]) == "cli <redacted>"
+    # ordinary paths and flags survive
+    assert describe_command(["python", "-m", "pkg.mod", "./data/input.csv", "--verbose"]) == (
+        "python -m pkg.mod ./data/input.csv --verbose"
+    )
 
 
 def test_inline_program_is_not_stored_and_statuses_are_separate(tmp_path: Path) -> None:

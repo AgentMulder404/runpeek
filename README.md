@@ -93,6 +93,68 @@ for executors and `nemulai.inject()` / `nemulai.extract()` across processes.
 If you cannot use `nemulai run`, call `nemulai.install()` before the provider
 client is imported.
 
+## Watching a coding agent (Claude Code)
+
+Run your coding agent normally. In another terminal:
+
+```bash
+nemulai watch                      # this project; transcripts modified in the last 7 days, then live
+nemulai watch --history none       # only what happens from now on
+nemulai watch --all-projects       # every project Claude Code has sessions for
+```
+
+It polls `~/.claude/projects/<this project>/*.jsonl` (and `…/<session>/subagents/*.jsonl`)
+every 2 s, read-only, and prints one line per ingest. Ctrl-C stops it; checkpoints
+mean a restart never duplicates anything. Then:
+
+```bash
+nemulai sessions                   # sessions in this project: turns, actions, errors, tokens, ≈$ API-equivalent
+nemulai session <id-prefix>        # usage by model, turns, actions by tool, findings with evidence
+nemulai findings                   # potential inefficiencies across sessions
+nemulai session <id> --set-customer acme --set-job refactor   # explicit mapping only; never inferred
+```
+
+Supported source: **Claude Code 2.1.x** transcripts (CLI 2.1.258 verified; the
+file format is undocumented, so the adapter is versioned and experimental — other
+writer versions are parsed best-effort and marked `unknown_version`). Codex is
+not yet supported; the capability check and adapter path are in
+[`docs/AGENT_SOURCES.md`](docs/AGENT_SOURCES.md).
+
+What the numbers are:
+
+- **Tokens** are provider-reported per API request, deduplicated by message id
+  (Claude Code writes several transcript entries per streamed response).
+- **≈$ API-equivalent** is a rate-card calculation at Anthropic list prices
+  (`anthropic-list@2026-09-09`). For subscription users it is **not** a charge,
+  a quota, or a saving. Source-reported cost is not available in transcripts
+  (only in Claude Code's OpenTelemetry export, which this does not consume).
+- Sessions belong to a **project**, never to a customer, unless you map them.
+- Agent usage is kept apart from the SDK harness tables and is never added into
+  `nemulai summary`'s totals.
+
+Three diagnostics, all deterministic and local, each reported as a *potential
+inefficiency* with evidence, counts, limitations and a suggestion:
+
+| Finding | Evidence | What it does not claim |
+|---|---|---|
+| `repeated_failing_action` | the same normalised action failed ≥ 3 times with no Edit/Write recorded between | that a Bash side effect didn't change something |
+| `repeated_read` | the same file read ≥ 3 times with no Edit/Write to it between | that its contents were re-billed, or any saving |
+| `retry_loop` | ≥ 4 consecutive errors from one tool inside 10 min, or the same action ≥ 5 times inside 3 min | that a gap, permission wait or user pause is a stall |
+
+Privacy: only allowlisted metadata is stored — tool name, a relative path /
+program name / host, timestamps, error flag, token counts, and a **keyed
+fingerprint** of the normalised arguments (HMAC with a per-store random key that
+never leaves the store and is excluded from export). No prompts, tool inputs,
+outputs, commands or file contents. Fingerprints are treated as sensitive derived
+data. The store is created `0600`.
+
+Measured on this machine (Apple Silicon, Python 3.12, 2026-09-09) — measurements,
+not targets: idle watcher 0.0 % CPU averaged over 20 s, 18.5 MB RSS; ingest of a
+synthetic 8.4 MB / 10,101-line transcript in 0.27 s wall including interpreter
+start and diagnostics (~37k lines/s); an incremental tick with 100 new lines
+0.14 s wall including interpreter start; live ingest of this project's 80 real
+transcripts (52,311 entries, 9,652 requests) in ~1.0 s.
+
 ## What is supported (tested), and what is not
 
 Tested against `openai==2.44.0` (pinned in the dev extras; the adapter's
@@ -131,10 +193,13 @@ is reported as `billing: unknown`.
   card), `no_usage` (errors, in-progress, unsupported), `partial` (lower bound).
 - **Unknown is never zero.** A missing usage block, an unknown model, an error
   or a timeout produce a charge with an unknown or unpriced status, not `$0`.
-- **Rates** come from immutable, dated rate cards. The shipped
-  `openai-list@2025-08-01` was verified against the official pricing page on
-  2026-09-09 (every listed model matched); prices change, so re-verify before
-  relying on a figure, or pass your own with `--rate-card file.json`. The card effective at the attempt's start time is used; a
+- **Rates** come from immutable, dated rate cards. `openai-list@2025-08-01`
+  is unchanged from its first release; `openai-list@2026-09-09` and
+  `anthropic-list@2026-09-09` carry prices as published on their verification
+  date (their `effective_from` is that date, not evidence of when the prices
+  began). Among cards covering an attempt's date the newest wins, so historical
+  estimates keep their card and value (tested). Pass your own with
+  `--rate-card file.json`. The card effective at the attempt's start time is used; a
   fallback is recorded when none covers it. There is no "latest" default.
 - **Cached and reasoning tokens** are subsets of prompt and completion tokens
   (per the SDK's usage types) and are never charged twice: cost =

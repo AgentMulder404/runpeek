@@ -24,18 +24,32 @@ BOOT_DIR = Path(__file__).parent / "_boot"
 DEFAULT_DB = Path(".nemulai") / "nemulai.db"
 
 _SECRET_FLAG_WORDS = ("key", "token", "secret", "password", "passwd", "credential", "auth")
+_SECRET_PREFIXES = ("sk-", "sk_", "pk_", "rk_", "ghp_", "gho_", "github_pat_", "xox", "akia", "aiza", "ya29.", "eyj")
 _COMMAND_MAX_CHARS = 200
+
+
+def _looks_like_secret(tok: str) -> bool:
+    low = tok.lower()
+    if low.startswith(_SECRET_PREFIXES):
+        return True
+    # long single-token strings with no path separators: opaque tokens, hashes, JWTs
+    if len(tok) >= 32 and "/" not in tok and "." not in tok.strip("."):
+        if sum(ch.isalnum() for ch in tok) / len(tok) > 0.9:
+            return True
+    return False
 
 
 def describe_command(argv: list[str]) -> str:
     """A command description safe to store and display.
 
-    The recorded command is metadata, and metadata can leak: ``python -c
-    "<program>"`` carries source that may embed prompts or secrets, and
-    ``--api-key=...`` carries the secret itself. Rule: keep tokens that look
-    like program names, paths, modules or plain flags; redact inline code,
-    anything multi-line or whitespace-bearing, and values of secret-looking
-    options. Length is capped. This is a description, not a transcript.
+    This is a HEURISTIC, not a guarantee. It keeps tokens that look like
+    program names, paths, modules or plain flags and redacts: inline ``-c``
+    programs; anything containing whitespace or JSON/brace payloads; values of
+    secret-looking options (``--api-key …``, ``TOKEN=…``); URL userinfo and
+    query strings; and positional tokens with known secret prefixes or the
+    shape of an opaque credential. A secret that looks like an ordinary word
+    or a short path will pass through. New collection paths (the agent
+    watcher) do not use this at all — they store allowlisted fields only.
     """
     out: list[str] = []
     redact_next = False
@@ -49,21 +63,44 @@ def describe_command(argv: list[str]) -> str:
             redact_next = True
             continue
         low = tok.lower()
-        if any(ch.isspace() for ch in tok):
+        if any(ch.isspace() for ch in tok) or any(ch in tok for ch in "{}[]"):
             out.append("<redacted>")
             continue
-        if "=" in tok and any(w in low.split("=", 1)[0] for w in _SECRET_FLAG_WORDS):
-            out.append(tok.split("=", 1)[0] + "=<redacted>")
+        if "://" in tok:
+            out.append(_redact_url(tok))
             continue
+        if "=" in tok:
+            k, v = tok.split("=", 1)
+            if any(w in k.lower() for w in _SECRET_FLAG_WORDS) or _looks_like_secret(v):
+                out.append(k + "=<redacted>")
+                continue
         if low.startswith("--") and any(w in low for w in _SECRET_FLAG_WORDS):
             out.append(tok)
             redact_next = True
+            continue
+        if _looks_like_secret(tok):
+            out.append("<redacted>")
             continue
         out.append(tok)
     text = " ".join(out)
     if len(text) > _COMMAND_MAX_CHARS:
         text = text[: _COMMAND_MAX_CHARS - 1] + "…"
     return text
+
+
+def _redact_url(tok: str) -> str:
+    """Keep scheme, host and path; drop userinfo, query and fragment."""
+    from urllib.parse import urlsplit
+
+    try:
+        u = urlsplit(tok)
+    except ValueError:
+        return "<redacted>"
+    host = u.hostname or ""
+    port = f":{u.port}" if u.port else ""
+    marker = "<redacted>@" if u.username or u.password else ""
+    tail = "?<redacted>" if u.query else ""
+    return f"{u.scheme}://{marker}{host}{port}{u.path}{tail}"
 
 
 def _db(args: argparse.Namespace) -> Path:
@@ -201,7 +238,11 @@ def cmd_events(args: argparse.Namespace) -> int:
 
 
 EXPORT_TABLES = ("runs", "spans", "operations", "attempts", "identifiers", "source_observations",
-                 "correlations", "charges", "perspectives", "cost_estimates", "health_events")
+                 "correlations", "charges", "perspectives", "cost_estimates", "health_events",
+                 # coding-agent observer (no run_id; always exported whole). `meta` is never exported:
+                 # it holds the fingerprint key.
+                 "agent_sessions", "agent_turns", "agent_actions", "agent_usage", "agent_findings",
+                 "watch_checkpoints")
 
 
 def cmd_export(args: argparse.Namespace) -> int:
@@ -244,6 +285,92 @@ def cmd_reprice(args: argparse.Namespace) -> int:
           f"(re-running with identical inputs creates none)")
     print()
     print(summ.render(summ.build(conn, run_id, p)))
+    return 0
+
+
+# ----------------------------------------------------------------------------- agent observer
+
+
+def _open_or_create(args: argparse.Namespace) -> sqlite3.Connection:
+    path = _db(args)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+    existed = path.exists()
+    conn = open_connection(path)
+    apply_schema(conn)
+    if not existed:
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    return conn
+
+
+def _project_arg(args: argparse.Namespace) -> str | None:
+    if getattr(args, "all_projects", False):
+        return None
+    return str(Path(args.project).resolve()) if getattr(args, "project", None) else os.getcwd()
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    from .agents.watch import Watcher
+
+    if args.source != "claude-code":
+        sys.exit(f"nemulai watch: source {args.source!r} is not supported yet (claude-code only)")
+    conn = _open_or_create(args)
+    w = Watcher(conn, project=_project_arg(args), all_projects=args.all_projects, history=args.history,
+                interval_s=args.interval, cards=_cards(args))
+    w.install_signal_handlers()
+    w.run(once=args.once)
+    conn.close()
+    return 0
+
+
+def cmd_sessions(args: argparse.Namespace) -> int:
+    from .agents.report import render_sessions
+
+    conn = _open(args)
+    print(render_sessions(conn, _project_arg(args), args.last))
+    return 0
+
+
+def cmd_session(args: argparse.Namespace) -> int:
+    from .agents.report import render_session, resolve_session_id
+
+    conn = _open(args)
+    sid = resolve_session_id(conn, args.session_id)
+    if sid is None:
+        sys.exit(f"nemulai session: no unique session matching {args.session_id!r}")
+    if args.set_customer is not None or args.set_job is not None:
+        conn.execute("UPDATE agent_sessions SET customer_id = COALESCE(?, customer_id),"
+                     " job_name = COALESCE(?, job_name) WHERE session_id = ?", (args.set_customer, args.set_job, sid))
+        print(f"session {sid[:8]} mapped explicitly: customer {args.set_customer or '(unchanged)'},"
+              f" job {args.set_job or '(unchanged)'}")
+    print(render_session(conn, sid, findings_only=args.findings_only))
+    return 0
+
+
+def cmd_findings(args: argparse.Namespace) -> int:
+    from .agents.report import render_finding
+
+    conn = _open(args)
+    project = _project_arg(args)
+    where = "" if project is None else " WHERE s.project_path = ?"
+    params: tuple[Any, ...] = () if project is None else (project,)
+    rows = conn.execute(
+        "SELECT f.* FROM agent_findings f JOIN agent_sessions s ON s.session_id = f.session_id"
+        f"{where} ORDER BY f.last_at DESC LIMIT ?", (*params, args.last),
+    ).fetchall()
+    print(f"nemulai findings · {'project ' + project if project else 'all projects'} · {len(rows)} shown"
+          " · each is a potential inefficiency, not a verdict")
+    for f in rows:
+        for line in render_finding(f):
+            print(line)
+    if not rows:
+        print("  none")
     return 0
 
 
@@ -294,6 +421,39 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--run")
     rp.add_argument("--all-runs", action="store_true")
     rp.set_defaults(fn=cmd_reprice)
+
+    w = sub.add_parser("watch", help="observe coding-agent sessions in the background (foreground process)")
+    common(w, perspective=False)
+    w.add_argument("--source", default="claude-code", choices=["claude-code"])
+    w.add_argument("--project", help="project directory to watch (default: current directory)")
+    w.add_argument("--all-projects", action="store_true", help="watch every project the agent has sessions for")
+    w.add_argument("--history", default="7d",
+                   help="initial history: none | all | <N>d | <N>h (default 7d: files modified in the last 7 days)")
+    w.add_argument("--interval", type=float, default=2.0, help="poll interval in seconds")
+    w.add_argument("--once", action="store_true", help="ingest what exists now and exit")
+    w.set_defaults(fn=cmd_watch)
+
+    ss = sub.add_parser("sessions", help="list observed coding-agent sessions")
+    common(ss, perspective=False)
+    ss.add_argument("--project")
+    ss.add_argument("--all-projects", action="store_true")
+    ss.add_argument("--last", type=int, default=20)
+    ss.set_defaults(fn=cmd_sessions)
+
+    so = sub.add_parser("session", help="one session: usage, turns, actions, findings")
+    common(so, perspective=False)
+    so.add_argument("session_id")
+    so.add_argument("--findings-only", action="store_true")
+    so.add_argument("--set-customer", metavar="CUSTOMER", help="map this session to a customer explicitly")
+    so.add_argument("--set-job", metavar="JOB")
+    so.set_defaults(fn=cmd_session)
+
+    fd = sub.add_parser("findings", help="potential inefficiencies across sessions")
+    common(fd, perspective=False)
+    fd.add_argument("--project")
+    fd.add_argument("--all-projects", action="store_true")
+    fd.add_argument("--last", type=int, default=50)
+    fd.set_defaults(fn=cmd_findings)
     return ap
 
 

@@ -28,8 +28,10 @@ NONE = "none"
 @dataclass(frozen=True)
 class Prices:
     input: str
-    cached_input: str
+    cached_input: str  # cache-read (hit) price
     output: str
+    cache_write_5m: str | None = None  # prompt-cache write prices (Anthropic); None = not priced separately
+    cache_write_1h: str | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,8 @@ def _parse_card(data: dict[str, Any]) -> RateCard:
             input=str(p["input"]),
             cached_input=str(p.get("cached_input", p["input"])),
             output=str(p["output"]),
+            cache_write_5m=str(p["cache_write_5m"]) if p.get("cache_write_5m") is not None else None,
+            cache_write_1h=str(p["cache_write_1h"]) if p.get("cache_write_1h") is not None else None,
         )
         for name, p in data["models"].items()
     }
@@ -138,9 +142,12 @@ class RateCardSet:
             # No execution time: only a fallback can apply.
             return _fallback(candidates, None, fallback)
         d = at.date()
-        for c in candidates:
-            if c.covers(d):
-                return c, EFFECTIVE_AT_EXECUTION
+        # Several cards may cover a date (an older open-ended card and a newer
+        # one). The newest effective_from wins; older estimates keep their own
+        # card id, so nothing already computed changes.
+        covering = [c for c in candidates if c.covers(d)]
+        if covering:
+            return covering[-1], EFFECTIVE_AT_EXECUTION
         return _fallback(candidates, d, fallback)
 
 

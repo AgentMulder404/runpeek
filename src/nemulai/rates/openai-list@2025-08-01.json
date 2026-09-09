@@ -6,78 +6,18 @@
   "unit": "usd_per_million_tokens",
   "effective_from": "2025-08-01",
   "effective_to": null,
-  "note": "Text-token list prices. Verified against https://developers.openai.com/api/docs/pricing on 2026-09-09 (all models listed matched). Prices change: re-verify before relying on a figure, or supply your own card with --rate-card. Unknown models are reported as unpriced, never zero.",
+  "note": "Transcribed list prices for text tokens. Verify against openai.com/pricing before relying on any figure; supply your own card with --rate-card for contract rates. Unknown models are reported as unpriced, never zero.",
   "models": {
-    "gpt-4o": {
-      "input": "2.50",
-      "cached_input": "1.25",
-      "output": "10.00"
-    },
-    "gpt-4o-mini": {
-      "input": "0.15",
-      "cached_input": "0.075",
-      "output": "0.60"
-    },
-    "gpt-4.1": {
-      "input": "2.00",
-      "cached_input": "0.50",
-      "output": "8.00"
-    },
-    "gpt-4.1-mini": {
-      "input": "0.40",
-      "cached_input": "0.10",
-      "output": "1.60"
-    },
-    "gpt-4.1-nano": {
-      "input": "0.10",
-      "cached_input": "0.025",
-      "output": "0.40"
-    },
-    "gpt-5": {
-      "input": "1.25",
-      "cached_input": "0.125",
-      "output": "10.00"
-    },
-    "gpt-5-mini": {
-      "input": "0.25",
-      "cached_input": "0.025",
-      "output": "2.00"
-    },
-    "gpt-5-nano": {
-      "input": "0.05",
-      "cached_input": "0.005",
-      "output": "0.40"
-    },
-    "o3": {
-      "input": "2.00",
-      "cached_input": "0.50",
-      "output": "8.00"
-    },
-    "o4-mini": {
-      "input": "1.10",
-      "cached_input": "0.275",
-      "output": "4.40"
-    },
-    "gpt-6-astra": {
-      "input": "10.00",
-      "cached_input": "1.00",
-      "output": "50.00"
-    },
-    "gpt-5.6-sol": {
-      "input": "4.00",
-      "cached_input": "0.40",
-      "output": "20.00"
-    },
-    "gpt-5.6-terra": {
-      "input": "2.00",
-      "cached_input": "0.20",
-      "output": "12.00"
-    },
-    "gpt-5.6-luna": {
-      "input": "0.20",
-      "cached_input": "0.02",
-      "output": "1.20"
-    }
+    "gpt-4o":        {"input": "2.50",  "cached_input": "1.25",  "output": "10.00"},
+    "gpt-4o-mini":   {"input": "0.15",  "cached_input": "0.075", "output": "0.60"},
+    "gpt-4.1":       {"input": "2.00",  "cached_input": "0.50",  "output": "8.00"},
+    "gpt-4.1-mini":  {"input": "0.40",  "cached_input": "0.10",  "output": "1.60"},
+    "gpt-4.1-nano":  {"input": "0.10",  "cached_input": "0.025", "output": "0.40"},
+    "gpt-5":         {"input": "1.25",  "cached_input": "0.125", "output": "10.00"},
+    "gpt-5-mini":    {"input": "0.25",  "cached_input": "0.025", "output": "2.00"},
+    "gpt-5-nano":    {"input": "0.05",  "cached_input": "0.005", "output": "0.40"},
+    "o3":            {"input": "2.00",  "cached_input": "0.50",  "output": "8.00"},
+    "o4-mini":       {"input": "1.10",  "cached_input": "0.275", "output": "4.40"}
   },
   "aliases": {
     "gpt-4o-2024-08-06": "gpt-4o",
@@ -91,9 +31,5 @@
     "gpt-5-nano-2025-08-07": "gpt-5-nano",
     "o3-2025-04-16": "o3",
     "o4-mini-2025-04-16": "o4-mini"
-  },
-  "verified_against": {
-    "url": "https://developers.openai.com/api/docs/pricing",
-    "date": "2026-09-09"
   }
 }

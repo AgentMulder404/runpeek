@@ -169,3 +169,108 @@ CREATE TABLE IF NOT EXISTS health_events (
   detail  TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_health_run ON health_events (run_id);
+
+-- ---------------------------------------------------------------------------
+-- Coding-agent observer (nemulai watch). Separate from the SDK harness tables:
+-- agent usage is never mixed into the M1 attempt/charge totals.
+-- Only allowlisted metadata is stored; never prompts, tool payloads or file
+-- contents. Fingerprints are keyed HMACs and are treated as sensitive.
+
+CREATE TABLE IF NOT EXISTS agent_sessions (
+  session_id          TEXT PRIMARY KEY,
+  source              TEXT NOT NULL,             -- claude-code
+  source_version      TEXT,                      -- writer version seen in the transcript
+  format_status       TEXT NOT NULL DEFAULT 'supported',  -- supported | unknown_version | unparseable
+  project_path        TEXT,
+  transcript_path     TEXT NOT NULL,
+  parent_session_id   TEXT,
+  is_subagent         INTEGER NOT NULL DEFAULT 0,
+  first_event_at      TEXT,
+  last_event_at       TEXT,
+  first_seen_at       TEXT NOT NULL,
+  last_ingested_at    TEXT,
+  entries_ingested    INTEGER NOT NULL DEFAULT 0,
+  entries_unparseable INTEGER NOT NULL DEFAULT 0,
+  customer_id         TEXT,                      -- explicit mapping only (nemulai session <id> --set-customer)
+  job_name            TEXT
+);
+
+CREATE TABLE IF NOT EXISTS agent_turns (
+  turn_id            TEXT PRIMARY KEY,           -- the source's prompt id when present
+  session_id         TEXT NOT NULL,
+  started_at         TEXT,
+  ended_at           TEXT,
+  duration_ms        INTEGER,                    -- source-reported when available
+  assistant_messages INTEGER NOT NULL DEFAULT 0,
+  tool_calls         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_agent_turns_session ON agent_turns (session_id);
+
+CREATE TABLE IF NOT EXISTS agent_actions (
+  action_id     TEXT PRIMARY KEY,                -- the source's tool_use id
+  session_id    TEXT NOT NULL,
+  turn_id       TEXT,
+  sequence      INTEGER NOT NULL,                -- ingest order within the session
+  tool_name     TEXT NOT NULL,
+  action_kind   TEXT NOT NULL,                   -- read | edit | write | bash | search | web | mcp | other
+  target        TEXT,                            -- allowlisted: relative path, program name, or host
+  fingerprint   TEXT NOT NULL,                   -- keyed HMAC of normalised arguments (sensitive)
+  requested_at  TEXT,
+  completed_at  TEXT,
+  duration_ms   REAL,
+  is_error      INTEGER                          -- 1 | 0 | NULL (no result observed)
+);
+CREATE INDEX IF NOT EXISTS ix_agent_actions_session ON agent_actions (session_id, sequence);
+
+CREATE TABLE IF NOT EXISTS agent_usage (
+  usage_id              TEXT PRIMARY KEY,        -- the source's message id (dedupes repeated entries)
+  session_id            TEXT NOT NULL,
+  turn_id               TEXT,
+  request_id            TEXT,
+  model                 TEXT,
+  at                    TEXT,
+  input_tokens          INTEGER,
+  cache_write_5m_tokens INTEGER,
+  cache_write_1h_tokens INTEGER,
+  cache_read_tokens     INTEGER,
+  output_tokens         INTEGER,
+  web_search_requests   INTEGER,
+  web_fetch_requests    INTEGER,
+  usage_kind            TEXT NOT NULL,           -- per_request | cumulative_snapshot
+  provenance            TEXT NOT NULL,           -- provider_reported | estimated
+  source_cost_nanos     INTEGER,                 -- source-native reported cost; NULL when the source reports none
+  api_equiv_nanos       INTEGER,                 -- rate-card calculation; NOT a subscription charge
+  api_equiv_status      TEXT NOT NULL,           -- priced | unpriced | no_usage
+  rate_card_id          TEXT,
+  rate_resolution       TEXT,
+  calc_version          INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_agent_usage_session ON agent_usage (session_id);
+
+CREATE TABLE IF NOT EXISTS agent_findings (
+  finding_id  TEXT PRIMARY KEY,
+  fingerprint TEXT NOT NULL UNIQUE,              -- kind + session + evidence span; makes re-analysis idempotent
+  session_id  TEXT NOT NULL,
+  turn_id     TEXT,
+  kind        TEXT NOT NULL,                     -- repeated_failing_action | repeated_read | retry_loop
+  severity    TEXT NOT NULL DEFAULT 'potential_inefficiency',
+  summary     TEXT NOT NULL,
+  evidence    TEXT NOT NULL,                     -- JSON: action ids + timestamps
+  counts      TEXT NOT NULL,                     -- JSON: observed counts / durations / usage
+  limitations TEXT NOT NULL,
+  suggestion  TEXT NOT NULL,
+  first_at    TEXT,
+  last_at     TEXT,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_agent_findings_session ON agent_findings (session_id);
+
+CREATE TABLE IF NOT EXISTS watch_checkpoints (
+  transcript_path TEXT PRIMARY KEY,
+  session_id      TEXT NOT NULL,
+  inode           INTEGER,
+  size            INTEGER,
+  offset          INTEGER NOT NULL,              -- byte offset of the first unconsumed line
+  line_no         INTEGER NOT NULL,
+  updated_at      TEXT NOT NULL
+);
