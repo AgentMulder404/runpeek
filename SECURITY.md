@@ -14,14 +14,14 @@
 
 ## Reporting a vulnerability
 
-A private reporting channel has **not** been set up yet. This repository has
-no verified public remote or security contact at the time of writing, and
-GitHub private vulnerability reporting has not been enabled.
+A private reporting channel has **not** been verified yet. The intended
+public home is `github.com/AgentMulder404/runpeek`; GitHub private
+vulnerability reporting will be enabled there as part of the release
+checklist (`docs/RELEASE_CHECKLIST.md`, step 2), and this section will then
+link to it.
 
-Until a channel is published here, please do not open public issues for
-vulnerabilities that could expose other users' data. The maintainers will
-replace this section with a verified contact and, once the repository is
-hosted, enable private vulnerability reporting.
+Until that link appears here, please do not open public issues for
+vulnerabilities that could expose other users' data.
 
 ## Supported versions
 

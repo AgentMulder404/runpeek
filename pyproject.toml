@@ -8,12 +8,14 @@ version = "0.1.0.dev0"
 description = "RunPeek by NemulAI — see where your AI spends time and tokens. Local-first observability for supported AI applications and Claude Code sessions."
 readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
 authors = [{ name = "NemulAI" }]
 keywords = ["observability", "llm", "openai", "claude-code", "tokens", "cost", "local-first"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
   "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
@@ -33,6 +35,11 @@ dev = [
   "mypy>=1.11",
 ]
 
+[project.urls]
+Repository = "https://github.com/AgentMulder404/runpeek"
+Changelog = "https://github.com/AgentMulder404/runpeek/blob/main/CHANGELOG.md"
+Security = "https://github.com/AgentMulder404/runpeek/blob/main/SECURITY.md"
+
 [project.scripts]
 runpeek = "runpeek.cli:main"
 
@@ -43,7 +50,7 @@ where = ["src"]
 runpeek = ["schema.sql", "rates/*.json", "_boot/*.py", "py.typed"]
 
 [tool.setuptools]
-license-files = []
+license-files = ["LICENSE", "NOTICE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

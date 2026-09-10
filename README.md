@@ -1,21 +1,17 @@
 # RunPeek
 ### by NemulAI
 
-**See where your AI spends time and tokens.**
+See where your AI spends time and tokens.
 
-RunPeek observes supported AI applications and Claude Code sessions locally,
-attributes estimated model costs, and highlights repeated failures and
-repeated work.
+Watch supported AI workloads locally, understand estimated costs,
+and spot repeated failures and repeated work worth reviewing.
 
-It watches two things: the OpenAI Python SDK calls your own application makes
-(`runpeek run`), and the Claude Code sessions in a project (`runpeek watch`).
-It helps you answer *which customer or job caused these model calls*, *what
-did they consume*, *what would that cost at list prices*, and *where did the
-agent repeat itself*. Collection and analysis run entirely on your machine —
-no account, no service, no uploads, no runtime dependencies.
-
-RunPeek is not a model, an agent framework, or a gateway. Its diagnostics are
-deterministic local analysis of what a supported source already records.
+RunPeek watches two things: the OpenAI Python SDK calls your own application
+makes (`runpeek run`), and the Claude Code sessions in a project
+(`runpeek watch`). It helps you answer *which customer or job caused these
+model calls*, *what did they consume*, *what would that cost at list prices*,
+and *where did the agent repeat itself*. Collection and analysis run entirely
+on your machine — no account, no service, no uploads, no runtime dependencies.
 
 **Sample output** (rendered from a test fixture, not a real session):
 
@@ -42,10 +38,11 @@ deterministic local analysis of what a supported source already records.
 
 ## Install
 
-RunPeek is not on PyPI yet. Install from a checkout:
+RunPeek is not on PyPI yet. Install from a checkout (the repository below is
+the intended public location; until it is published, clone your local copy):
 
 ```bash
-git clone <path-or-url-of-this-repository> runpeek && cd runpeek
+git clone https://github.com/AgentMulder404/runpeek.git && cd runpeek
 python -m venv .venv && . .venv/bin/activate
 pip install -e .            # runtime: no dependencies
 pip install -e ".[dev]"     # adds the openai SDK, httpx, pytest, ruff, mypy — needed for the offline demo and tests
@@ -172,10 +169,16 @@ Details: runpeek events · Full accounting: runpeek summary --verbose
 - In Claude Code sessions: the same command failing again and again with no
   edit between attempts; the same file read repeatedly without an observed
   edit; a tool erroring across many different inputs; one action looping
-  tightly. Each is a *potential* inefficiency with its evidence, a next step,
-  and the limitation needed to read it correctly.
+  tightly. Each is a *potential* inefficiency — repetition is worth reviewing,
+  not proof of waste — with its evidence, a next step, and the limitation
+  needed to read it correctly.
 
 ## How it works
+
+RunPeek is not a model, an agent framework, or a gateway. It does not run
+your prompts and needs no LLM or cloud account of its own. Its diagnostics
+are deterministic local analysis of what a supported source already records:
+the SDK's usage block, or the transcript Claude Code writes.
 
 ```
  Python app ──► openai SDK ──► provider        Claude Code ──► ~/.claude/projects/<proj>/*.jsonl
@@ -251,7 +254,9 @@ fingerprint caveats: [`docs/PRIVACY.md`](docs/PRIVACY.md).
 - No benchmarks are published yet; performance targets in `docs/DESIGN.md`
   are targets.
 - The real-provider smoke test (`examples/real_openai.py`) has not been run by
-  the maintainers; it needs your own key and costs a fraction of a cent.
+  the maintainers; it needs your own key and costs a fraction of a cent. Nothing
+  in the test suite validates actual provider billing: mocked calls exercise the
+  accounting, and rate cards are dated transcriptions of list prices.
 
 ## Development and tests
 
@@ -291,8 +296,21 @@ import; `RUNPEEK_*` replaces `NEMULAI_*` (legacy names still honoured); an
 existing `./.nemulai/nemulai.db` is used in place with a notice. Details:
 [`docs/MIGRATION.md`](docs/MIGRATION.md).
 
+## Running the real-provider check yourself
+
+`examples/real_openai.py` makes two tiny non-streaming calls and one streaming
+call against a real model (about $0.0001). Provide your key to the shell only,
+never to a chat or a file in the repository:
+
+```bash
+read -rs OPENAI_API_KEY && export OPENAI_API_KEY      # typed silently
+runpeek run python examples/real_openai.py
+unset OPENAI_API_KEY
+```
+
+Expect three attempts (two priced, one `unsupported_stream`), one
+"No customer tag" row, and `x-request-id` identifiers in `runpeek export`.
+
 ## License
 
-**Not yet licensed for public distribution.** No license file has been added;
-the maintainers intend to choose one (Apache-2.0 is recommended) before the
-first public release. Until then, all rights are reserved by the authors.
+Apache License 2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

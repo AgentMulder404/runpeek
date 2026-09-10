@@ -125,16 +125,20 @@ class Watcher:
         stats = self.tick()
         active, empty = self._loaded_sessions()
         found = len(self._files)
-        note = f"Ready · {active} session{'s' if active != 1 else ''} loaded"
-        extra = []
-        if found != active:
-            extra.append(f"{found} transcript file{'s' if found != 1 else ''} found")
-        if empty:
-            extra.append(f"{empty} empty")
-        if stats.skipped_history:
-            extra.append(f"{stats.skipped_history} older than {self.history} skipped")
-        if extra:
-            note += " (" + ", ".join(extra) + ")"
+        if self.history == "none":
+            note = (f"Ready · {found} transcript file{'s' if found != 1 else ''} found; existing content skipped"
+                    " — watching new activity only")
+        else:
+            note = f"Ready · {active} session{'s' if active != 1 else ''} loaded"
+            extra = []
+            if found != active:
+                extra.append(f"{found} transcript file{'s' if found != 1 else ''} found")
+            if empty:
+                extra.append(f"{empty} empty")
+            if stats.skipped_history:
+                extra.append(f"{stats.skipped_history} older than {self.history} skipped")
+            if extra:
+                note += " (" + ", ".join(extra) + ")"
         self._emit(self.term.green(note))
         hist = self.conn.execute(
             "SELECT COUNT(*) n, COUNT(DISTINCT session_id) s FROM agent_findings f WHERE session_id IN"

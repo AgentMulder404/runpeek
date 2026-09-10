@@ -54,3 +54,4 @@ the prices began. See `docs/PRICING.md`.
 - One change per PR; include tests; keep `ruff` and `mypy --strict` clean.
 - Update `CHANGELOG.md` under *Unreleased*.
 - Do not add dependencies to the runtime package (it has none).
+- Contributions are accepted under the Apache License 2.0 (see `LICENSE`).

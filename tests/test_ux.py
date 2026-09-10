@@ -340,3 +340,17 @@ def test_every_printed_command_parses(home: Path, conn: sqlite3.Connection) -> N
             parser.parse_args(argv)
         except SystemExit as exc:  # argparse error
             raise AssertionError(f"printed command does not parse: {cmd!r}") from exc
+
+
+
+def test_history_none_startup_wording(home: Path, conn: sqlite3.Connection) -> None:
+    t = Transcript(home, PROJECT)
+    t.user_prompt()
+    t.bash("ls")
+    lines: list[str] = []
+    w = Watcher(conn, project=PROJECT, history="none", interval_s=0.01, rescan_s=0.01, out=lines.append,
+                term=Term(color=False, width=80))
+    w.run(once=True)
+    joined = "\n".join(lines)
+    assert "Ready · 1 transcript file found; existing content skipped — watching new activity only" in joined
+    assert "empty" not in joined and "older than none" not in joined

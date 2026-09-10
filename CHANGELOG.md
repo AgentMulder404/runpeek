@@ -3,7 +3,37 @@
 All notable changes to RunPeek are recorded here. The project is pre-release;
 versions below 1.0 may change interfaces between minor versions.
 
-## Unreleased
+## Unreleased — first public pre-release (0.1.0.dev0)
+
+RunPeek is an early, local-first observability harness. It is **not** stable
+or production-proven; interfaces may change before 1.0.
+
+**Supported and tested**
+- `runpeek run`: OpenAI Python SDK `chat.completions.create`, synchronous,
+  non-streaming (`openai==2.44.0`), with exactly-once invocation and
+  fail-open hooks; `runpeek.job()` attribution; plain summary and
+  `--verbose` accounting ledger; JSONL export; dated rate cards with
+  idempotent repricing under pinned perspectives.
+- `runpeek watch`: Claude Code sessions — **experimental** transcript
+  adapter built against writer versions 2.1.202–2.1.257 (CLI 2.1.258);
+  historical catch-up summarised, live event feed, three deterministic
+  diagnostics (repeated failure, repeated read, retry loop), `sessions`,
+  `session`, `findings`.
+
+**Known measurement limits**
+- Estimated cost is a list-price calculation from source-reported tokens: not
+  a subscription charge, quota, reconciled bill, or saving. Unknown models,
+  errors and streaming calls stay unpriced/unknown. Capture coverage is not
+  measurable. Repeated reads are not proof of repeated billing; findings are
+  potential inefficiencies, not waste. Mocked tests exercise accounting, not
+  provider billing.
+
+**Migration from nemulai** — see below and `docs/MIGRATION.md`.
+
+**Unfinished verification** — the real-provider smoke test has not been run
+by the maintainers; live incremental ingestion was verified only against the
+maintainer's own Claude Code session (see the release report), not across
+other environments.
 
 ### Rebrand: NemulAI harness → RunPeek by NemulAI
 
