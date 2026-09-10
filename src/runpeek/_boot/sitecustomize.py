@@ -7,7 +7,7 @@ Two rules:
 1. Fail open. Any failure prints one stderr line and the application runs
    uninstrumented.
 2. Chain. If another ``sitecustomize`` exists further along ``sys.path`` it is
-   executed too, so adding NemulAI never silently disables someone else's
+   executed too, so adding RunPeek never silently disables someone else's
    startup hook.
 """
 

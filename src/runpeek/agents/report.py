@@ -332,7 +332,8 @@ def render_finding(f: sqlite3.Row, term: Term | None = None, *, show_session: bo
     obs = [f"{len(ev)} tool calls", f"window {window}"]
     if usage and usage.get("available"):
         obs.append(f"{usage['requests']} model calls in the window")
-    L.append("    Observed: " + " · ".join(obs))
+    for ln in term.wrap("Observed: " + " · ".join(obs), indent=4):
+        L.append(ln)
     evidence = "Evidence: " + "; ".join(
         f"{e['action_id'][-8:]} {ui.clock(e['at'])}{' failed' if e.get('error') else ''}" for e in ev[:6]
     ) + (f"; … {len(ev) - 6} more" if len(ev) > 6 else "")

@@ -1,4 +1,4 @@
-"""NemulAI — local-first observability and efficiency harness for AI workloads.
+"""RunPeek by NemulAI — local-first observability and efficiency harness for AI workloads.
 
     import runpeek
 
