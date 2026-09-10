@@ -55,6 +55,31 @@ pip install -e ".[dev]"     # adds the openai SDK, httpx, pytest, ruff, mypy —
 
 Python 3.10+.
 
+## Set up in five minutes
+
+```bash
+# 1. install (a pre-release, so --pre)
+python -m venv ~/.venvs/runpeek && . ~/.venvs/runpeek/bin/activate
+pip install --pre runpeek
+runpeek --version                                  # runpeek 0.1.0a1
+
+# 2. watch Claude Code in a project (leave this terminal open)
+cd /path/to/project
+runpeek watch                                      # loads the last 7 days, then shows live events
+
+# 3. observe your own Python app (separate terminal, same venv)
+runpeek run python app.py                          # prints a cost/usage summary when the app exits
+
+# 4. review
+runpeek sessions                                   # Claude Code sessions in this project
+runpeek findings                                   # potential inefficiencies
+runpeek summary                                    # latest runpeek run of your app
+```
+
+Everything is written to `./.runpeek/runpeek.db` in the project directory —
+one store per project, nothing leaves the machine. Add `--project /path` or
+`--db /path/to/store.db` to point commands elsewhere.
+
 ## Quickstart A — watch Claude Code
 
 ```bash
