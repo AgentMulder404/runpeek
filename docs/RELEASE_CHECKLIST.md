@@ -62,14 +62,20 @@ unzip -l dist/runpeek-*.whl                  # 32 files: package, rates, schema,
 
 First public version: `0.1.0a1` (a pre-release; `pip install` needs `--pre`).
 
-## 6. Publishing the package (separate decision; optional trusted publishing)
+## 6. Publishing the package (trusted publishing, no tokens)
 
-Nothing is uploaded by this repository's workflows. If and when publication is
-approved: reserve the name by uploading to TestPyPI first, then configure
-PyPI *trusted publishing* for `AgentMulder404/runpeek` with a dedicated
-release workflow (`permissions: id-token: write`, triggered by a tag) — added
-only after the repository exists and CI has passed. Until then the README
-must keep saying "not on PyPI yet".
+`.github/workflows/publish.yml` publishes on a `v*` tag through PyPI trusted
+publishing. One-time setup on pypi.org (account owner only):
+
+1. pypi.org → *Your account* → *Publishing* → *Add a new pending publisher*:
+   PyPI project name `runpeek`, owner `AgentMulder404`, repository `runpeek`,
+   workflow `publish.yml`, environment `release`.
+2. Push the tag: `git tag v0.1.0a1 && git push origin v0.1.0a1`.
+3. Watch the `publish` workflow; then `pip install --pre runpeek` in a clean
+   venv and update the README install section.
+
+Pre-releases need `pip install --pre runpeek`. The workflow refuses a tag
+that does not match `pyproject.toml`'s version.
 
 ## Not part of this release
 
