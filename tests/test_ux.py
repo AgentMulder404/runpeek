@@ -67,17 +67,26 @@ def test_quiet_polls_print_nothing(home: Path, conn: sqlite3.Connection) -> None
     w.catch_up()
     n = len(lines)
     w._live = True
+    w._known_at_live_start = {t.session_id}
     w.ingestor.on_event = w._on_ingest_event
     for _ in range(5):
         w.tick()
     assert len(lines) == n, lines[n:]
-    # a real event still shows up
+    # a real event still shows up; a session known before watching started is "active", not "new"
     t.user_prompt()
     t.turn_duration(12_000)
     w.tick()
     feed = "\n".join(lines[n:])
     assert "TURN STARTED" in feed and "TURN FINISHED" in feed and "12 seconds" in feed
-    assert feed.index("NEW SESSION") < feed.index("TURN STARTED")
+    assert "SESSION ACTIVE" in feed and "NEW SESSION" not in feed
+    assert feed.index("SESSION ACTIVE") < feed.index("TURN STARTED")
+    # a session created after watching started is announced as new
+    t2 = Transcript(home, PROJECT)
+    t2.user_prompt()
+    t2.bash("ls")
+    w.discover()
+    w.tick()
+    assert "NEW SESSION" in "\n".join(lines[n:])
     assert not any(ln and ln.isspace() for ln in feed.splitlines())  # no whitespace-only lines
     assert "entries" not in feed and "requests" not in feed
 

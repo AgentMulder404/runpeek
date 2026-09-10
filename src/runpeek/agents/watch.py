@@ -59,6 +59,7 @@ class Watcher:
         self._last_stat: dict[str, tuple[int, int, float]] = {}
         self._failing: set[str] = set()
         self._announced_sessions: set[str] = set()
+        self._known_at_live_start: set[str] = set()
         self._finding_updates: dict[str, float] = {}
         self._live = False
         self._live_started: float = 0.0
@@ -226,10 +227,15 @@ class Watcher:
         if tf.session_id in self._announced_sessions:
             return
         self._announced_sessions.add(tf.session_id)
-        what = "NEW SUBAGENT" if tf.is_subagent else "NEW SESSION"
         sid = tf.session_id.split("/")[-1][:8]
-        self._event(self.term.green(what),
-                    [f"{ui.project_name(tf.project_path)} · started {ui.clock(at)} · session {sid}"], at=at)
+        kind = "SUBAGENT" if tf.is_subagent else "SESSION"
+        if tf.session_id in self._known_at_live_start:
+            # Existed before watching started: it resumed, it did not begin now.
+            self._event(self.term.green(f"{kind} ACTIVE"),
+                        [f"{ui.project_name(tf.project_path)} · activity at {ui.clock(at)} · session {sid}"], at=at)
+        else:
+            self._event(self.term.green(f"NEW {kind}"),
+                        [f"{ui.project_name(tf.project_path)} · started {ui.clock(at)} · session {sid}"], at=at)
 
     def _on_ingest_event(self, kind: str, tf: TranscriptFile, p: dict[str, Any]) -> None:
         sid = tf.session_id.split("/")[-1][:8]
@@ -304,6 +310,9 @@ class Watcher:
             self._emit(self._stopped_line())
             return self.totals
         self._live = True
+        self._known_at_live_start = {
+            str(r["session_id"]) for r in self.conn.execute("SELECT session_id FROM agent_sessions")
+        }
         self._live_started = time.monotonic()
         self._last_event = time.monotonic()
         self.ingestor.on_event = self._on_ingest_event
