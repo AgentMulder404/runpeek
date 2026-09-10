@@ -38,8 +38,13 @@ on your machine — no account, no service, no uploads, no runtime dependencies.
 
 ## Install
 
-RunPeek is not on PyPI yet. Install from a checkout (the repository below is
-the intended public location; until it is published, clone your local copy):
+RunPeek is a pre-release on PyPI (`0.1.0a1`), so `pip` needs `--pre`:
+
+```bash
+pip install --pre runpeek
+```
+
+Or from source, which is also what you need for the offline demo and tests:
 
 ```bash
 git clone https://github.com/AgentMulder404/runpeek.git && cd runpeek

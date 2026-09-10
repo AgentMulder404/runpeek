@@ -16,8 +16,8 @@ is a separate action that needs the owner's explicit go-ahead.
 - [x] Tracked files scanned: no credentials, transcripts, stores, exports or
       machine-specific paths (the only pattern hit is the fake tokens in
       `tests/test_cli.py`'s redaction test).
-- [x] Local `origin` remote set to `https://github.com/AgentMulder404/runpeek.git`
-      (nothing pushed; the repository does not exist yet).
+- [x] Repository published at `https://github.com/AgentMulder404/runpeek`; CI green.
+- [x] `runpeek 0.1.0a1` published to PyPI via trusted publishing (2026-09-10).
 
 ## 1. Create the repository (owner decision)
 
