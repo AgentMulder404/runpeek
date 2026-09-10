@@ -19,6 +19,7 @@ from typing import Any
 
 from .money import format_usd
 from .perspective import Perspective
+from .ui import Term, sanitize
 
 
 @dataclass
@@ -243,7 +244,8 @@ def _pct(n: int, d: int) -> str:
     return f"{(100.0 * n / d):.1f}%" if d else "—"
 
 
-def render(s: Summary) -> str:
+def render_ledger(s: Summary) -> str:
+    """The full accounting view (--verbose)."""
     L: list[str] = []
     run = s.run or {}
     head = f"nemulai · run {s.run_id or 'all runs'}"
@@ -352,4 +354,124 @@ def render(s: Summary) -> str:
         L.append("")
         L.append("No AI operations were observed. This does not mean no AI spend occurred —")
         L.append("see the adapters line above for what was and was not instrumented.")
+    return "\n".join(L)
+
+
+# ----------------------------------------------------------------------------- plain view
+
+
+def _app_line(run: dict[str, Any]) -> tuple[str, bool]:
+    """(sentence, ok)"""
+    if "app_exit_status" not in run or run.get("app_exit_status") is None:
+        return "Application exit status unknown (not launched by nemulai run)", True
+    rc = int(run["app_exit_status"])
+    if rc < 0:
+        return f"Application killed by {_signal_name(-rc)}", False
+    if rc == 0:
+        return "Application exited successfully", True
+    return f"Application failed (exit {rc})", False
+
+
+def _telemetry_line(run: dict[str, Any]) -> tuple[str, bool]:
+    if run.get("ended_at") and run.get("clean_exit"):
+        return "telemetry saved", True
+    return "telemetry NOT saved cleanly — final counters unavailable; loss after the last heartbeat is unknown", False
+
+
+def render(s: Summary, *, verbose: bool = False, term: Term | None = None, heading: str = "RUN COMPLETE") -> str:
+    """Readable default. Accounting detail lives in render_ledger (--verbose)."""
+    if verbose:
+        return render_ledger(s)
+    term = term or Term(color=False)
+    run = s.run or {}
+    L: list[str] = []
+    L.append(term.bold(f"NEMULAI / {heading}"))
+    L.append("")
+    if run.get("command"):
+        L.append(sanitize(run["command"]))
+    if run:
+        app, app_ok = _app_line(run)
+        tel, tel_ok = _telemetry_line(run)
+        L.append((app if app_ok else term.amber(app)) + " · " + (term.green(tel) if tel_ok else term.red(tel)))
+    L.append("")
+
+    completed = s.status_counts.get("completed", 0)
+    failed = s.status_counts.get("provider_error", 0)
+    L.append(f"{s.attempts} model call{'s' if s.attempts != 1 else ''} observed")
+    parts = [f"{completed} completed", f"{failed} failed"]
+    if s.in_progress:
+        parts.append(f"{s.in_progress} still in progress (no end record)")
+    if s.unsupported:
+        parts.append(f"{s.unsupported} streaming (observed, not measured)")
+    L.append("  " + " · ".join(parts))
+    L.append("")
+
+    priced = s.est_counts.get("priced", 0) + s.est_counts.get("partial", 0)
+    if s.attempts:
+        L.append(f"{format_usd(s.known_cost_nanos)}  known estimated API cost")
+        if priced == s.attempts:
+            L.append(f"{'':<{len(format_usd(s.known_cost_nanos))}}  all {s.attempts} calls priced")
+        else:
+            L.append(f"{'':<{len(format_usd(s.known_cost_nanos))}}  {priced} of {s.attempts} calls priced"
+                     " — total is incomplete")
+        if s.partial_cost_nanos:
+            L.append(f"{'':<{len(format_usd(s.known_cost_nanos))}}  includes {format_usd(s.partial_cost_nanos)}"
+                     " from calls with partial usage (lower bound)")
+        L.append("")
+
+    if s.by_customer:
+        names = [("No customer tag" if c["customer"] == "(unattributed)" else
+                  "No customer (job only)" if c["customer"] == "(job only)" else sanitize(c["customer"]))
+                 for c in s.by_customer]
+        w = max(16, max(len(n) for n in names) + 2)
+        L.append(f"{'CUSTOMER':<{w}}{'ESTIMATED COST':>16}{'UNPRICED / UNKNOWN':>22}")
+        for name, c in zip(names, s.by_customer, strict=True):
+            measured = c["ops"] - c["unmeasured"]
+            cost = format_usd(c["cost"]) if measured else "—"
+            L.append(f"{name:<{w}}{cost:>16}{c['unmeasured']:>22}")
+        L.append("")
+
+    missing: list[str] = []
+    for model, n in sorted(s.unpriced_models.items()):
+        missing.append(f"{n} call{'s' if n != 1 else ''} used a model with no known price ({sanitize(model)})")
+    if failed:
+        missing.append(f"{failed} failed call{'s' if failed != 1 else ''} returned no usage")
+    if s.in_progress:
+        missing.append(f"{s.in_progress} call{'s' if s.in_progress != 1 else ''} never recorded an end")
+    if s.unsupported:
+        missing.append(f"{s.unsupported} streaming call{'s' if s.unsupported != 1 else ''} not measured"
+                       " (unsupported in this release)")
+    if s.est_counts.get("partial"):
+        missing.append(f"{s.est_counts['partial']} call{'s' if s.est_counts['partial'] != 1 else ''} had partial usage")
+    if s.fallback_priced:
+        missing.append(f"{s.fallback_priced} call{'s' if s.fallback_priced != 1 else ''} priced with a rate card"
+                       " not effective at execution time (fallback)")
+    if s.inferred_unresolved:
+        missing.append(f"{s.inferred_unresolved} possible duplicate pair(s) unresolved — total may be over-counted")
+    if missing:
+        L.append("Missing from this estimate:")
+        for m in missing:
+            for ln in term.wrap("• " + m, indent=2, first_indent=0):
+                L.append(ln)
+        L.append("")
+    if s.attempts:
+        L.append("Estimate at list prices — not verified provider billing.")
+
+    c = s.counters
+    if run:
+        clean = bool(run.get("ended_at") and run.get("clean_exit"))
+        if not clean:
+            L.append(term.red(f"Collection warning: run did not end cleanly; {s.persisted_rows} rows were saved,"
+                              " dropped/unflushed counts are unknown."))
+        else:
+            loss = [(k, c.get(k)) for k in ("dropped", "unflushed", "persist_failures") if c.get(k)]
+            if loss or s.hook_failures:
+                L.append(term.red("Collection warning: " + ", ".join(f"{k} {v}" for k, v in loss)
+                                  + (f", hook failures {s.hook_failures}" if s.hook_failures else "")))
+    if s.attempts == 0:
+        L.append(term.amber("No AI calls were observed. This does not mean none happened: only the OpenAI Python SDK"
+                            " (sync, non-streaming) is observed in this release."))
+    L.append("")
+    L.append(term.green("Stored locally · nothing uploaded"))
+    L.append("Details: nemulai events · Full accounting: nemulai summary --verbose")
     return "\n".join(L)

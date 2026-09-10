@@ -57,8 +57,8 @@ def test_repeated_failure_without_change_is_flagged(home: Path, conn: sqlite3.Co
     assert counts["failures"] == 3 and counts["window_seconds"] > 0
     assert len(json.loads(f["evidence"])) == 3 and all(e["error"] for e in json.loads(f["evidence"]))
     assert f["severity"] == "potential_inefficiency"
-    assert "pytest" in f["summary"] and "Bash" in f["summary"]
-    assert "Bash" in f["limitations"]
+    assert "A pytest command failed 3 times consecutively" in f["summary"]
+    assert "commands" in f["limitations"] and "not visible" in f["limitations"]
     assert counts["usage_in_window"]["available"] is True and counts["usage_in_window"]["requests"] >= 2
 
 
@@ -98,7 +98,7 @@ def test_repeated_read_of_unchanged_file(home: Path, conn: sqlite3.Connection) -
     assert _kinds(rows) == ["repeated_read"]
     f = rows[0]
     assert "src/big_module.py" in f["summary"] and "read 4 times" in f["summary"]
-    assert "no token or cost saving is claimed" in f["limitations"]
+    assert "Repeated billing cannot be determined" in f["limitations"]
     assert json.loads(f["counts"])["reads"] == 4
 
 
@@ -170,6 +170,7 @@ def test_findings_are_idempotent_and_extend(home: Path, conn: sqlite3.Connection
     assert len(rows) == 1
     rows = _analyse(conn, t)  # re-analysis creates nothing new
     assert len(rows) == 1
-    t.bash("pytest", is_error=True)  # one more failure → a distinct, longer finding supersedes by fingerprint
+    t.bash("pytest", is_error=True)  # one more failure → the same item is updated in place, not duplicated
     rows = _analyse(conn, t)
-    assert [json.loads(r["counts"])["failures"] for r in rows] == [3, 4]
+    assert len(rows) == 1
+    assert json.loads(rows[0]["counts"])["failures"] == 4 and rows[0]["updated_at"] is not None

@@ -1,11 +1,19 @@
 """Deterministic diagnostics over stored action metadata. No content, no
-network, no model calls. Every finding is a *potential inefficiency* with
-its evidence, counts, limitations and a suggestion that follows from them.
+network, no model calls. Every item is a *potential inefficiency* with what
+was observed, its evidence, a supported next step and the limitation needed to
+read it correctly.
 
-What counts as "a relevant change" is deliberately narrow and observable: an
-Edit/Write action recorded between two events. Bash side effects (git
-checkout, package installs) are not visible as changes, and external edits
-are never visible — both are stated in each finding's limitations.
+"An observed change" is deliberately narrow: an Edit/Write tool call recorded
+between two events. Changes made through commands (git, installs, generated
+files) or outside the agent are not visible, and every item says so.
+
+Categories do not overlap: each action contributes to at most one item.
+  repeated_failing_action  one identical action failing repeatedly
+  repeated_read            one file read repeatedly without an observed edit
+  retry_loop               errors across *different* inputs of one tool, or a
+                           tight loop of one *succeeding* action
+A finding is one row per (kind, session, first evidence action). When the
+same run grows, the row is updated in place rather than duplicated.
 """
 
 from __future__ import annotations
@@ -13,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -27,6 +35,18 @@ TIGHT_LOOP_MIN = 5
 TIGHT_LOOP_WINDOW_S = 180
 
 _MUTATING_KINDS = {"edit", "write"}
+
+TITLES = {
+    "repeated_failing_action": "REPEATED FAILURE",
+    "repeated_read": "REPEATED READ",
+    "retry_loop:consecutive_errors": "REPEATED TOOL ERRORS",
+    "retry_loop:tight_repetition": "TIGHT LOOP",
+}
+
+
+def title_for(kind: str, counts: dict[str, Any]) -> str:
+    mode = counts.get("mode")
+    return TITLES.get(f"{kind}:{mode}") or TITLES.get(kind) or kind.replace("_", " ").upper()
 
 
 @dataclass
@@ -52,7 +72,7 @@ class Finding:
     kind: str
     session_id: str
     turn_id: str | None
-    summary: str
+    summary: str  # one plain sentence: what was observed
     evidence: list[dict[str, Any]]
     counts: dict[str, Any]
     limitations: str
@@ -61,10 +81,25 @@ class Finding:
     last_at: str | None
 
     @property
+    def group_key(self) -> str:
+        first = self.evidence[0]["action_id"] if self.evidence else ""
+        return f"{self.kind}|{self.session_id}|{first}"
+
+    @property
     def fingerprint(self) -> str:
         ids = [e["action_id"] for e in self.evidence]
         raw = f"{self.kind}|{self.session_id}|{ids[0] if ids else ''}|{ids[-1] if ids else ''}|{len(ids)}"
         return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+@dataclass
+class Delta:
+    new: list[str] = field(default_factory=list)  # finding ids
+    updated: list[str] = field(default_factory=list)
+
+    @property
+    def count(self) -> int:
+        return len(self.new) + len(self.updated)
 
 
 def _ts(s: str | None) -> datetime | None:
@@ -82,6 +117,17 @@ def _span_s(a: Action, b: Action) -> float | None:
     return (tb - ta).total_seconds() if ta and tb else None
 
 
+def _window(span: float | None) -> str:
+    if span is None:
+        return "an unknown time span"
+    s = int(round(span))
+    if s < 90:
+        return f"{s} seconds"
+    if s < 3600:
+        return f"{round(s / 60)} minutes"
+    return f"{s / 3600:.1f} hours"
+
+
 def load_actions(conn: sqlite3.Connection, session_id: str) -> list[Action]:
     rows = conn.execute(
         "SELECT action_id, turn_id, sequence, tool_name, action_kind, target, fingerprint, requested_at, completed_at,"
@@ -96,6 +142,15 @@ def _ev(a: Action) -> dict[str, Any]:
             "error": bool(a.is_error) if a.is_error is not None else None}
 
 
+def _what(a: Action) -> str:
+    """A safe noun phrase for an action: tool + allowlisted target only."""
+    if a.action_kind == "bash":
+        return f"A {a.target} command" if a.target else "A command"
+    if a.target:
+        return f"{a.tool_name} on {a.target}"
+    return f"A {a.tool_name} call"
+
+
 # ------------------------------------------------------------------ detectors
 
 
@@ -105,7 +160,6 @@ def repeated_failing_actions(session_id: str, actions: list[Action]) -> list[Fin
     runs: dict[str, list[Action]] = {}
     for a in actions:
         if a.action_kind in _MUTATING_KINDS and a.is_error != 1:
-            # any observed change resets every open run
             for fp, run in list(runs.items()):
                 if len(run) >= REPEATED_FAILURE_MIN:
                     out.append(_failure_finding(session_id, run))
@@ -126,20 +180,18 @@ def repeated_failing_actions(session_id: str, actions: list[Action]) -> list[Fin
 def _failure_finding(session_id: str, run: list[Action]) -> Finding:
     first, last = run[0], run[-1]
     span = _span_s(first, last)
-    what = f"{first.tool_name}" + (f" on {first.target}" if first.target else "")
     return Finding(
         kind="repeated_failing_action",
         session_id=session_id,
         turn_id=first.turn_id,
-        summary=f"{what} failed {len(run)} times in a row with no edit or write recorded in between",
+        summary=f"{_what(first)} failed {len(run)} times consecutively over {_window(span)}.",
         evidence=[_ev(a) for a in run],
         counts={"failures": len(run), "window_seconds": round(span, 1) if span is not None else None,
                 "turns_spanned": len({a.turn_id for a in run})},
-        limitations=("Only Edit/Write tool calls count as an observed change. Changes made through Bash "
-                     "(git, package installs, generated files) or outside the agent are not visible here, so "
-                     "some repeats may have followed a real change. Error content was not inspected."),
-        suggestion=("Read the failure once and change something before the next attempt — or ask the agent to "
-                    "stop and report the error instead of retrying the same command."),
+        limitations=("No edit or write was observed between the failures. Changes made through commands "
+                     "(git, installs, generated files) or outside the agent are not visible, so a change may "
+                     "have happened. The error output was not inspected."),
+        suggestion="Check the error before repeating the command.",
         first_at=first.requested_at,
         last_at=last.requested_at,
     )
@@ -171,32 +223,33 @@ def _read_finding(session_id: str, run: list[Action]) -> Finding:
         kind="repeated_read",
         session_id=session_id,
         turn_id=first.turn_id,
-        summary=f"{first.target} was read {len(run)} times with no edit to it recorded in between",
+        summary=f"{first.target} was read {len(run)} times in {_window(span)}.",
         evidence=[_ev(a) for a in run],
         counts={"reads": len(run), "distinct_ranges": distinct_ranges,
                 "window_seconds": round(span, 1) if span is not None else None,
                 "turns_spanned": len({a.turn_id for a in run})},
-        limitations=("This shows the file was requested repeatedly; whether its contents were re-sent as model "
-                     "input each time is not observable from the transcript, so no token or cost saving is "
-                     "claimed. External modifications to the file are not visible."
-                     + (" Different offsets/limits were used, so some reads may have targeted different parts."
+        limitations=("No edit to that file was observed between reads. Repeated billing cannot be determined: "
+                     "whether the contents were re-sent as model input each time is not visible in the "
+                     "transcript. Changes made outside the agent are not visible."
+                     + (" Different offsets or limits were used, so some reads may have covered different parts."
                         if distinct_ranges > 1 else "")),
-        suggestion=("If the same file keeps being needed, read it once with the narrowest useful range, or put "
-                    "the relevant excerpt where the agent will retain it (e.g. CLAUDE.md or the task prompt)."),
+        suggestion=("If the file is needed repeatedly, read it once with the narrowest useful range, or keep the "
+                    "relevant excerpt in the task context."),
         first_at=first.requested_at,
         last_at=last.requested_at,
     )
 
 
-def retry_loops(session_id: str, actions: list[Action]) -> list[Finding]:
-    """(a) ≥ N consecutive errors from one tool inside a window, no success of
-    that tool between; (b) the same action executed ≥ M times inside a short
-    window regardless of result. Silence is never evidence."""
+def retry_loops(session_id: str, actions: list[Action], exclude: set[str] | None = None) -> list[Finding]:
+    """(a) ≥ N consecutive errors from one tool across different inputs inside a
+    window; (b) the same succeeding action executed ≥ M times inside a short
+    window. Actions already covered by a repeated_failing_action item are
+    excluded (``exclude``) so categories never overlap. Silence is never evidence."""
     out: list[Finding] = []
-    # (a) consecutive errors per tool
+    exclude = exclude or set()
     err_runs: dict[str, list[Action]] = {}
     for a in actions:
-        if a.is_error is None:
+        if a.is_error is None or a.action_id in exclude:
             continue
         if a.is_error == 1:
             run = err_runs.setdefault(a.tool_name, [])
@@ -212,10 +265,10 @@ def retry_loops(session_id: str, actions: list[Action]) -> list[Finding]:
     for run in err_runs.values():
         if len(run) >= RETRY_LOOP_MIN_ERRORS and not _single_action(run):
             out.append(_retry_finding(session_id, run, "consecutive_errors"))
-    # (b) tight repetition of one fingerprint
     by_fp: dict[str, list[Action]] = {}
     for a in actions:
-        by_fp.setdefault(a.fingerprint, []).append(a)
+        if a.is_error != 1 and a.action_id not in exclude:  # failing repeats are repeated_failing_action
+            by_fp.setdefault(a.fingerprint, []).append(a)
     seen: set[str] = set()
     for fp, group in by_fp.items():
         if len(group) < TIGHT_LOOP_MIN:
@@ -245,14 +298,12 @@ def _retry_finding(session_id: str, run: list[Action], mode: str) -> Finding:
     first, last = run[0], run[-1]
     span = _span_s(first, last)
     if mode == "consecutive_errors":
-        summary = f"{first.tool_name} returned {len(run)} errors in a row"
-        suggestion = ("Check whether the tool itself is failing (service, permissions, environment) before "
-                      "continuing; repeated identical errors rarely resolve on their own.")
+        summary = (f"{first.tool_name} returned {len(run)} errors in a row across different inputs"
+                   f" over {_window(span)}.")
+        suggestion = "Check whether the tool or the service behind it is failing before continuing."
     else:
-        summary = (f"the same {first.tool_name} action" + (f" ({first.target})" if first.target else "")
-                   + f" ran {len(run)} times within {round(span or 0)} s")
-        suggestion = ("Look at what changed between runs; if nothing did, the loop is not converging and a "
-                      "different approach or a human decision is needed.")
+        summary = f"{_what(first)} ran {len(run)} times within {_window(span)}."
+        suggestion = "Confirm something changed between runs; if not, the loop is not converging."
     return Finding(
         kind="retry_loop",
         session_id=session_id,
@@ -262,8 +313,8 @@ def _retry_finding(session_id: str, run: list[Action], mode: str) -> Finding:
         counts={"actions": len(run), "errors": sum(1 for a in run if a.is_error == 1), "mode": mode,
                 "window_seconds": round(span, 1) if span is not None else None},
         limitations=("Based only on recorded tool calls and their timestamps. Gaps, permission prompts and "
-                     "user thinking time are never treated as evidence. Error content was not inspected; the "
-                     "tool may have been failing for different reasons each time."),
+                     "thinking time are never treated as evidence. Error output was not inspected; the causes "
+                     "may have differed each time."),
         suggestion=suggestion,
         first_at=first.requested_at,
         last_at=last.requested_at,
@@ -273,31 +324,43 @@ def _retry_finding(session_id: str, run: list[Action], mode: str) -> Finding:
 # -------------------------------------------------------------------- driver
 
 
-def analyse_session(conn: sqlite3.Connection, session_id: str) -> int:
-    """Run all detectors and upsert findings. Returns new findings count."""
+def analyse_session(conn: sqlite3.Connection, session_id: str) -> Delta:
+    """Run all detectors; insert new items, update grown ones in place."""
+    delta = Delta()
     actions = load_actions(conn, session_id)
     if not actions:
-        return 0
-    findings = (
-        repeated_failing_actions(session_id, actions)
-        + repeated_reads(session_id, actions)
-        + retry_loops(session_id, actions)
-    )
-    new = 0
+        return delta
+    failures = repeated_failing_actions(session_id, actions)
+    covered = {e["action_id"] for f in failures for e in f.evidence}
+    findings = failures + repeated_reads(session_id, actions) + retry_loops(session_id, actions, covered)
     for f in findings:
         usage = _usage_for(conn, session_id, f.first_at, f.last_at)
         counts = dict(f.counts)
         counts["usage_in_window"] = usage
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO agent_findings (finding_id, fingerprint, session_id, turn_id, kind, severity,"
-            " summary, evidence, counts, limitations, suggestion, first_at, last_at, created_at)"
-            " VALUES (?,?,?,?,?,'potential_inefficiency',?,?,?,?,?,?,?,?)",
-            (new_id("fnd"), f.fingerprint, f.session_id, f.turn_id, f.kind, f.summary,
-             json.dumps(f.evidence, separators=(",", ":")), json.dumps(counts, separators=(",", ":")),
-             f.limitations, f.suggestion, f.first_at, f.last_at, now_iso()),
-        )
-        new += 1 if cur.rowcount > 0 else 0
-    return new
+        existing = conn.execute(
+            "SELECT finding_id, fingerprint FROM agent_findings WHERE group_key = ?", (f.group_key,)
+        ).fetchone()
+        if existing is None:
+            fid = new_id("fnd")
+            conn.execute(
+                "INSERT INTO agent_findings (finding_id, fingerprint, group_key, session_id, turn_id, kind, severity,"
+                " summary, evidence, counts, limitations, suggestion, first_at, last_at, created_at)"
+                " VALUES (?,?,?,?,?,?,'potential_inefficiency',?,?,?,?,?,?,?,?)",
+                (fid, f.fingerprint, f.group_key, f.session_id, f.turn_id, f.kind, f.summary,
+                 json.dumps(f.evidence, separators=(",", ":")), json.dumps(counts, separators=(",", ":")),
+                 f.limitations, f.suggestion, f.first_at, f.last_at, now_iso()),
+            )
+            delta.new.append(fid)
+        elif existing["fingerprint"] != f.fingerprint:
+            conn.execute(
+                "UPDATE agent_findings SET fingerprint = ?, summary = ?, evidence = ?, counts = ?, limitations = ?,"
+                " suggestion = ?, last_at = ?, updated_at = ? WHERE finding_id = ?",
+                (f.fingerprint, f.summary, json.dumps(f.evidence, separators=(",", ":")),
+                 json.dumps(counts, separators=(",", ":")), f.limitations, f.suggestion, f.last_at, now_iso(),
+                 existing["finding_id"]),
+            )
+            delta.updated.append(str(existing["finding_id"]))
+    return delta
 
 
 def _usage_for(conn: sqlite3.Connection, session_id: str, first_at: str | None, last_at: str | None) -> dict[str, Any]:
@@ -311,4 +374,4 @@ def _usage_for(conn: sqlite3.Connection, session_id: str, first_at: str | None, 
     ).fetchone()
     return {"available": True, "requests": row["n"], "input_tokens": row["i"], "cache_read_tokens": row["cr"],
             "cache_write_tokens": row["cw"], "output_tokens": row["o"],
-            "note": "provider-reported usage for API requests timestamped inside the finding's window"}
+            "note": "usage reported in Claude Code transcripts for model calls timestamped inside the window"}

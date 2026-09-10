@@ -29,26 +29,35 @@ def test_watch_once_sessions_session_findings_export(tmp_path: Path) -> None:
 
     r = _run(["watch", "--db", str(db), "--project", PROJECT, "--history", "all", "--once"], cwd=tmp_path, home=home)
     assert r.returncode == 0, r.stderr
-    assert "source claude-code" in r.stdout and "1 transcript file(s) found" in r.stdout
-    assert "1 new finding(s)" in r.stdout and "watch stopped after 1 tick" in r.stdout
+    assert "NEMULAI / LIVE WATCH" in r.stdout and "Watching Claude Code in cli-project" in r.stdout
+    assert "Local collection · no uploads" in r.stdout and "Ready · 1 session loaded" in r.stdout
+    assert "Historical: 1 potential inefficiencies in 1 session" in r.stdout
+    assert "Done. Loaded 3 tool calls" in r.stdout and f"Review: nemulai sessions --project {PROJECT}" in r.stdout
+    assert "entries" not in r.stdout  # parser vocabulary never reaches the default screen
 
     s = _run(["sessions", "--db", str(db), "--project", PROJECT], cwd=tmp_path, home=home)
-    assert s.returncode == 0 and t.session_id[:8] in s.stdout and "API-equivalent" in s.stdout
+    assert s.returncode == 0 and "RECENT CLAUDE CODE SESSIONS" in s.stdout and t.session_id[:8] in s.stdout
+    assert f"nemulai session {t.session_id[:8]}" in s.stdout and "Tool calls" in s.stdout
+    sd = _run(["sessions", "--db", str(db), "--project", PROJECT, "--detailed"], cwd=tmp_path, home=home)
+    assert "API-equivalent estimate" in sd.stdout and "Est. cost" in sd.stdout
 
     d = _run(["session", "--db", str(db), t.session_id[:8]], cwd=tmp_path, home=home)
     assert d.returncode == 0
-    assert "[repeated_failing_action]" in d.stdout and "npm" in d.stdout
-    assert "not a subscription charge" in d.stdout and "source-reported cost: not available" in d.stdout
-    assert "TURNS (1)" in d.stdout and "65s" in d.stdout
+    assert f"SESSION {t.session_id[:8]}" in d.stdout and "REPEATED FAILURE" in d.stdout and "npm" in d.stdout
+    assert "Check the error before repeating the command." in d.stdout
+    assert "Not your subscription charge" in d.stdout and "Source-reported cost: not available" in d.stdout
+    assert "1 turns" in d.stdout and "1 min 05 s" in d.stdout
+    assert "npm test" not in d.stdout  # commands never shown
     for sentinel in SENTINELS:
         assert sentinel not in d.stdout
 
     m = _run(["session", "--db", str(db), t.session_id[:8], "--set-customer", "acme", "--set-job", "refactor",
               "--findings-only"], cwd=tmp_path, home=home)
-    assert "mapped explicitly" in m.stdout and "customer acme / job refactor (explicit)" in m.stdout
+    assert "mapped explicitly" in m.stdout and "Label: customer acme · job refactor (set by you)" in m.stdout
 
     f = _run(["findings", "--db", str(db), "--project", PROJECT], cwd=tmp_path, home=home)
-    assert f.returncode == 0 and "1 shown" in f.stdout and "potential inefficiency" in f.stdout
+    assert f.returncode == 0 and "POTENTIAL INEFFICIENCIES TO REVIEW" in f.stdout and "1 shown" in f.stdout
+    assert "potential inefficiency, not proven waste" in f.stdout
 
     out = tmp_path / "x.jsonl"
     x = _run(["export", "--db", str(db), "--out", str(out)], cwd=tmp_path, home=home)
@@ -67,6 +76,6 @@ def test_watch_reports_missing_project_dir_and_unsupported_source(tmp_path: Path
     home = tmp_path / "home"
     (home / "projects").mkdir(parents=True)
     r = _run(["watch", "--db", str(tmp_path / "n.db"), "--project", "/nowhere", "--once"], cwd=tmp_path, home=home)
-    assert r.returncode == 0 and "0 transcript file(s) found" in r.stdout
+    assert r.returncode == 0 and "Ready · 0 sessions loaded" in r.stdout
     r2 = _run(["watch", "--db", str(tmp_path / "n.db"), "--source", "codex", "--once"], cwd=tmp_path, home=home)
     assert r2.returncode != 0 and "invalid choice" in r2.stderr

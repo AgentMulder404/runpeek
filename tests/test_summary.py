@@ -63,8 +63,15 @@ def test_buckets_reconcile(harness: Harness) -> None:
     names = {c["customer"] for c in s.by_customer}
     assert names == {"acme", "globex", "(job only)", "(unattributed)"}
     assert sum(m["ops"] for m in s.by_model) == 9
-    text = summ.render(s)
+    text = summ.render_ledger(s)
     assert "KNOWN ESTIMATED COST   $0.006" in text and "not actual spend" in text
+    plain = summ.render(s)
+    assert "9 model calls observed" in plain and "7 completed · 2 failed" in plain
+    assert "$0.006  known estimated API cost" in plain and "5 of 9 calls priced — total is incomplete" in plain
+    assert "No customer tag" in plain and "No customer (job only)" in plain
+    assert "1 call used a model with no known price (mystery)" in plain
+    assert "2 failed calls returned no usage" in plain
+    assert "Estimate at list prices — not verified provider billing." in plain
     assert re.search(r"unpriced\s+1 charges", text) and '"mystery" (1)' in text
     assert re.search(r"no_usage\s+3 charges", text)
     assert "(job only)" in text and "(unattributed)" in text
@@ -74,5 +81,6 @@ def test_buckets_reconcile(harness: Harness) -> None:
 def test_zero_observations_message(harness: Harness) -> None:
     conn = harness.account()
     text = summ.render(summ.build(conn, harness.run_id, DEFAULT))
-    assert "No AI operations were observed" in text
-    assert "does not mean no AI spend" in text
+    assert "No AI calls were observed" in text and "does not mean none happened" in text
+    ledger = summ.render_ledger(summ.build(conn, harness.run_id, DEFAULT))
+    assert "No AI operations were observed" in ledger

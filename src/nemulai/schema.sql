@@ -249,7 +249,8 @@ CREATE INDEX IF NOT EXISTS ix_agent_usage_session ON agent_usage (session_id);
 
 CREATE TABLE IF NOT EXISTS agent_findings (
   finding_id  TEXT PRIMARY KEY,
-  fingerprint TEXT NOT NULL UNIQUE,              -- kind + session + evidence span; makes re-analysis idempotent
+  fingerprint TEXT NOT NULL UNIQUE,              -- kind + session + evidence span; changes when evidence grows
+  group_key   TEXT,                              -- kind + session + first evidence id; one row per group (consolidated)
   session_id  TEXT NOT NULL,
   turn_id     TEXT,
   kind        TEXT NOT NULL,                     -- repeated_failing_action | repeated_read | retry_loop
@@ -261,7 +262,8 @@ CREATE TABLE IF NOT EXISTS agent_findings (
   suggestion  TEXT NOT NULL,
   first_at    TEXT,
   last_at     TEXT,
-  created_at  TEXT NOT NULL
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_agent_findings_session ON agent_findings (session_id);
 

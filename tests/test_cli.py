@@ -26,14 +26,20 @@ def test_run_example_then_summary_and_export(tmp_path: Path) -> None:
     r = _run(["run", "--db", str(db), "--", sys.executable, str(EXAMPLES / "basic.py")], cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert "support assistant (offline demo)" in r.stdout
-    assert "KNOWN ESTIMATED COST" in r.stdout
-    assert "acme" in r.stdout and "(unattributed)" in r.stdout
-    assert 'model not in rate card: "acme-preview-1" (1)' in r.stdout
-    assert "provider_error 2" in r.stdout
-    assert "ended cleanly" in r.stdout
+    assert "NEMULAI / RUN COMPLETE" in r.stdout
+    assert "Application exited successfully · telemetry saved" in r.stdout
+    assert "8 model calls observed" in r.stdout and "6 completed · 2 failed" in r.stdout
+    assert "known estimated API cost" in r.stdout and "5 of 8 calls priced — total is incomplete" in r.stdout
+    assert "acme" in r.stdout and "No customer tag" in r.stdout
+    assert "1 call used a model with no known price (acme-preview-1)" in r.stdout
+    assert "2 failed calls returned no usage" in r.stdout
+    assert "Stored locally · nothing uploaded" in r.stdout
+    assert "will be billed" not in r.stdout and "KNOWN ESTIMATED COST" not in r.stdout
 
     s = _run(["summary", "--db", str(db)], cwd=tmp_path)
-    assert s.returncode == 0 and "KNOWN ESTIMATED COST" in s.stdout
+    assert s.returncode == 0 and "NEMULAI / SUMMARY" in s.stdout
+    v = _run(["summary", "--db", str(db), "--verbose"], cwd=tmp_path)
+    assert "KNOWN ESTIMATED COST" in v.stdout and "provider_error 2" in v.stdout
 
     ev = _run(["events", "--db", str(db), "--last", "3"], cwd=tmp_path)
     assert ev.returncode == 0 and ev.stdout.count("\n") == 4
@@ -111,9 +117,8 @@ def test_crash_leaves_readable_store_and_unclean_run(tmp_path: Path) -> None:
     )
     r = _run(["run", "--db", str(db), "--", sys.executable, "-c", app], cwd=tmp_path)
     assert r.returncode == 9
-    assert "telemetry: DID NOT END CLEANLY" in r.stdout
-    assert "application exit: 9 (failed)" in r.stdout
-    assert "persisted rows" in r.stdout and "final counters unavailable" in r.stdout
+    assert "telemetry NOT saved cleanly" in r.stdout and "Application failed (exit 9)" in r.stdout
+    assert "Collection warning" in r.stdout and "rows were saved" in r.stdout
     assert "records 0" not in r.stdout
     assert "customer='acme'" not in r.stdout  # the -c program is never displayed
     import sqlite3
@@ -174,7 +179,7 @@ def test_inline_program_is_not_stored_and_statuses_are_separate(tmp_path: Path) 
               "SECRET_PROMPT = 'do not leak me'\nimport sys; sys.exit(2)"], cwd=tmp_path)
     assert r.returncode == 2
     assert "SECRET_PROMPT" not in r.stdout
-    assert "application exit: 2 (failed)" in r.stdout and "telemetry: ended cleanly" in r.stdout
+    assert "Application failed (exit 2) · telemetry saved" in r.stdout
     conn = sqlite3.connect(db)
     cmd, app_rc = conn.execute("SELECT command, app_exit_status FROM runs").fetchone()
     assert cmd.endswith("-c <redacted>") and "SECRET_PROMPT" not in cmd

@@ -58,6 +58,12 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(runs)")}
     if "app_exit_status" not in cols:
         conn.execute("ALTER TABLE runs ADD COLUMN app_exit_status INTEGER")
+    fcols = {r[1] for r in conn.execute("PRAGMA table_info(agent_findings)")}
+    if "group_key" not in fcols:
+        conn.execute("ALTER TABLE agent_findings ADD COLUMN group_key TEXT")
+    if "updated_at" not in fcols:
+        conn.execute("ALTER TABLE agent_findings ADD COLUMN updated_at TEXT")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_findings_group ON agent_findings (group_key)")
 
 
 def _j(obj: Any) -> str | None:

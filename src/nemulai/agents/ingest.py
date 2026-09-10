@@ -16,6 +16,7 @@ import json
 import os
 import secrets
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -81,8 +82,14 @@ class Ingestor:
         cards: RateCardSet | None = None,
         history_since: datetime | None = None,
         history_none: bool = False,
+        on_event: Callable[[str, TranscriptFile, dict[str, Any]], None] | None = None,
     ) -> None:
         self.conn = conn
+        # Optional live sink: ("turn_start" | "turn_end" | "activity", file, payload).
+        # The watcher attaches it only after historical catch-up, so history is
+        # never replayed as live events.
+        self.on_event = on_event
+        self._active: set[str] = set()
         self.cards = cards or RateCardSet.builtin()
         self.key = fingerprint_key(conn)
         self.history_since = history_since
@@ -237,6 +244,8 @@ class Ingestor:
                 (ev.turn_id, sid, ev.at),
             )
             stats.turns += cur.rowcount if cur.rowcount > 0 else 0
+            if cur.rowcount > 0:
+                self._emit("turn_start", tf, {"turn_id": ev.turn_id, "at": ev.at})
         elif isinstance(ev, TurnDurationEvent):
             if parser.current_turn:
                 self.conn.execute(
@@ -244,6 +253,8 @@ class Ingestor:
                     " WHERE turn_id = ?",
                     (ev.duration_ms, ev.at, parser.current_turn),
                 )
+                self._emit("turn_end", tf, {"turn_id": parser.current_turn, "at": ev.at,
+                                            "duration_ms": ev.duration_ms})
         elif isinstance(ev, ToolUseEvent):
             fp = fingerprint(self.key, ev.fingerprint_input)
             self._seq[sid] = self._seq.get(sid, 0) + 1
@@ -255,6 +266,7 @@ class Ingestor:
             )
             if cur.rowcount > 0:
                 stats.actions += 1
+                self._activity(tf, ev.at)
                 if parser.current_turn:
                     self.conn.execute("UPDATE agent_turns SET tool_calls = tool_calls + 1 WHERE turn_id = ?",
                                       (parser.current_turn,))
@@ -269,9 +281,25 @@ class Ingestor:
                 (ev.at, 1 if ev.is_error else 0, ev.at, ev.at, ev.tool_use_id),
             )
         elif isinstance(ev, UsageEvent):
-            self._usage(sid, parser, ev, stats)
+            if self._usage(sid, parser, ev, stats):
+                self._activity(tf, ev.at)
 
-    def _usage(self, sid: str, parser: claude_code.Parser, ev: UsageEvent, stats: IngestStats) -> None:
+    def _emit(self, kind: str, tf: TranscriptFile, payload: dict[str, Any]) -> None:
+        if self.on_event is None:
+            return
+        try:
+            self.on_event(kind, tf, payload)
+        except Exception:
+            pass
+
+    def _activity(self, tf: TranscriptFile, at: str | None) -> None:
+        """First observed activity for a session in this ingestor's lifetime."""
+        if tf.session_id in self._active:
+            return
+        self._active.add(tf.session_id)
+        self._emit("activity", tf, {"at": at})
+
+    def _usage(self, sid: str, parser: claude_code.Parser, ev: UsageEvent, stats: IngestStats) -> bool:
         amount: int | None = None
         status = "no_usage" if not ev.has_usage else "unpriced"
         card_id: str | None = None
@@ -309,6 +337,8 @@ class Ingestor:
                     "UPDATE agent_turns SET assistant_messages = assistant_messages + 1 WHERE turn_id = ?",
                     (parser.current_turn,),
                 )
+            return True
+        return False
 
 
 def _parse_ts(s: str | None) -> datetime | None:

@@ -261,9 +261,12 @@ def test_subscription_labelling_in_reports(home: Path, conn: sqlite3.Connection)
     _ingest_all(conn)
     from nemulai.agents.report import render_session, render_sessions
 
-    for txt in (render_sessions(conn, PROJECT), render_session(conn, t.session_id)):
-        assert "API-equivalent" in txt and "not a subscription charge" in txt
-    assert "source-reported cost: not available" in render_session(conn, t.session_id)
+    detail = " ".join(render_session(conn, t.session_id).split())
+    listing = " ".join(render_sessions(conn, PROJECT, detailed=True).split())
+    for txt in (listing, detail):
+        assert "API-equivalent estimate" in txt and "Not your subscription charge" in txt
+    assert "Source-reported cost: not available in Claude Code transcripts" in detail
+    assert "as reported in Claude Code transcripts" in detail
 
 
 def test_watcher_run_once_and_clean_stop(home: Path, conn: sqlite3.Connection) -> None:
@@ -273,8 +276,8 @@ def test_watcher_run_once_and_clean_stop(home: Path, conn: sqlite3.Connection) -
     lines: list[str] = []
     w = Watcher(conn, project=PROJECT, history="all", interval_s=0.05, rescan_s=0.05, out=lines.append)
     totals = w.run(once=True)
-    assert totals.actions == 1 and any("source claude-code" in ln for ln in lines)
-    assert any("allowlisted metadata only" in ln for ln in lines)
+    assert totals.actions == 1 and any("NEMULAI / LIVE WATCH" in ln for ln in lines)
+    assert any("Prompts and file contents are not stored." in ln for ln in lines)
     # continuous mode: stop from another thread, new session discovered meanwhile.
     # The thread opens its own connection: sqlite3 connections are thread-bound.
     db_path = conn.execute("PRAGMA database_list").fetchone()[2]
@@ -304,6 +307,6 @@ def test_watcher_run_once_and_clean_stop(home: Path, conn: sqlite3.Connection) -
     th.join(5)
     assert not th.is_alive()
     assert _count(conn, "agent_actions") == 2
-    assert any(ln.startswith("watch stopped") for ln in lines)
+    assert any(ln.startswith("Stopped watching. Since watching started") for ln in lines)
     cp = conn.execute("SELECT COUNT(*) FROM watch_checkpoints").fetchone()[0]
     assert cp == 2

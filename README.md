@@ -26,33 +26,31 @@ the real `openai` client with a local mock transport — no key, no network. Whe
 it exits, `nemulai run` prints the run's summary:
 
 ```
-nemulai · run run_…  ·  python examples/basic.py  ·  ended cleanly
-perspective default  ·  rates list  ·  cards openai-list@2025-08-01  ·  calc 1
+NEMULAI / RUN COMPLETE
 
-OPERATIONS        8 attempts (8 operations)        adapters: openai.chat.completions.create
-  completed 6      provider_error 2      in_progress 0
+python examples/basic.py
+Application exited successfully · telemetry saved
 
-KNOWN ESTIMATED COST   $0.016052   list-price estimate, not actual spend   [deduplicated (exact identity only)]
-  priced              5 charges   $0.016052
-  unpriced            1 charges   model not in rate card: "acme-preview-1" (1)
-  no_usage            2 charges   2 errors
-  billing         expected 6 · unknown 2 · confirmed 0 · not_billed 0
+8 model calls observed
+  6 completed · 2 failed
 
-COVERAGE          usage: exact 6 / missing 0 of 6 completed   ·   pricing: 5 of 6 with usage priced   ·   capture: not measurable
-ATTRIBUTION       by cost: attributed 97.8% · job_only 0.0% · unattributed 2.2% ($0.000352)
+$0.016052  known estimated API cost
+           5 of 8 calls priced — total is incomplete
 
-BY CUSTOMER                 ops          cost   share  unmeasured
-  acme                        3      $0.01486   92.6%  
-  globex                      2      $0.00084    5.2%  1
-  (unattributed)              1     $0.000352    2.2%  
-  initech                     2             —       —  2
+CUSTOMER           ESTIMATED COST    UNPRICED / UNKNOWN
+acme                     $0.01486                     0
+globex                   $0.00084                     1
+No customer tag         $0.000352                     0
+initech                         —                     2
 
-BY MODEL                    ops     in tok    out tok    cached          cost
-  gpt-4o                      1      2,000        800         0        $0.013
-  gpt-4.1-mini                6      3,200      1,220       600     $0.003052
-  acme-preview-1              1        500        200         0      unpriced
+Missing from this estimate:
+• 1 call used a model with no known price (acme-preview-1)
+• 2 failed calls returned no usage
 
-TELEMETRY         records 58 · dropped 0 · unflushed at exit 0 · persist failures 0 · hook failures 0
+Estimate at list prices — not verified provider billing.
+
+Stored locally · nothing uploaded
+Details: nemulai events · Full accounting: nemulai summary --verbose
 ```
 
 Then:
@@ -103,13 +101,47 @@ nemulai watch --history none       # only what happens from now on
 nemulai watch --all-projects       # every project Claude Code has sessions for
 ```
 
-It polls `~/.claude/projects/<this project>/*.jsonl` (and `…/<session>/subagents/*.jsonl`)
-every 2 s, read-only, and prints one line per ingest. Ctrl-C stops it; checkpoints
-mean a restart never duplicates anything. Then:
+It starts with a short status block, loads recent history (summarised, never
+replayed as if it were happening now), and then prints only meaningful events:
+
+```
+NEMULAI / LIVE WATCH
+
+Watching Claude Code in AluminatiAi
+Use Claude Code normally. This terminal shows activity
+and potential inefficiencies as they appear.
+
+Local collection · no uploads
+Prompts and file contents are not stored.
+File paths and usage metadata are stored.
+
+Loading recent history…
+Ready · 3 sessions loaded (4 transcript files found, 1 empty)
+Historical: 2 potential inefficiencies in 2 sessions (not replayed here) · nemulai findings --project /Users/dev/AluminatiAi
+
+New activity appears below.
+Ctrl-C stops watching. Your Claude session keeps running.
+
+05:03  REPEATED READ
+       package.json was read 4 times in 2 minutes.
+       No edit to that file was observed between reads.
+       Repeated billing cannot be determined.
+
+       Evidence: nemulai session 719c4032
+
+05:04  TURN FINISHED
+       51 seconds · 8 tool calls (4 failed) · 8 model calls
+       API-equivalent estimate: $0.115
+       2 potential inefficiencies to review · nemulai session 719c4032
+```
+
+Polling internals and per-file counts are behind `--verbose`. Ctrl-C stops it;
+checkpoints mean a restart never duplicates anything. Then:
 
 ```bash
-nemulai sessions                   # sessions in this project: turns, actions, errors, tokens, ≈$ API-equivalent
-nemulai session <id-prefix>        # usage by model, turns, actions by tool, findings with evidence
+nemulai sessions                   # this project: started, tool calls, errors, model calls, items to review
+nemulai sessions --detailed        # adds tokens and the API-equivalent estimate per session
+nemulai session <id-prefix>        # activity, turns, potential inefficiencies with evidence, usage and cost
 nemulai findings                   # potential inefficiencies across sessions
 nemulai session <id> --set-customer acme --set-job refactor   # explicit mapping only; never inferred
 ```
@@ -132,14 +164,16 @@ What the numbers are:
 - Agent usage is kept apart from the SDK harness tables and is never added into
   `nemulai summary`'s totals.
 
-Three diagnostics, all deterministic and local, each reported as a *potential
-inefficiency* with evidence, counts, limitations and a suggestion:
+Three checks, all deterministic and local, each reported as a *potential
+inefficiency* with what was observed, evidence, a next step and its limitation.
+Each tool call is counted in at most one item; items grow in place rather than
+duplicating, and the live feed rate-limits updates to one per minute per item.
 
-| Finding | Evidence | What it does not claim |
+| Item | Evidence | What it does not claim |
 |---|---|---|
-| `repeated_failing_action` | the same normalised action failed ≥ 3 times with no Edit/Write recorded between | that a Bash side effect didn't change something |
-| `repeated_read` | the same file read ≥ 3 times with no Edit/Write to it between | that its contents were re-billed, or any saving |
-| `retry_loop` | ≥ 4 consecutive errors from one tool inside 10 min, or the same action ≥ 5 times inside 3 min | that a gap, permission wait or user pause is a stall |
+| REPEATED FAILURE | the same command or tool call failed ≥ 3 times with no edit or write observed between | that a command side effect didn't change something |
+| REPEATED READ | the same file read ≥ 3 times with no edit to it observed between | that its contents were re-billed, or any saving |
+| REPEATED TOOL ERRORS / TIGHT LOOP | ≥ 4 consecutive errors from one tool across different inputs inside 10 min, or the same succeeding action ≥ 5 times inside 3 min | that a gap, permission wait or user pause is a stall |
 
 Privacy: only allowlisted metadata is stored — tool name, a relative path /
 program name / host, timestamps, error flag, token counts, and a **keyed

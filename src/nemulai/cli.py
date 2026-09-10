@@ -19,6 +19,7 @@ from .ids import new_id
 from .money import usd_string
 from .rates import RateCardSet, load_card
 from .store import apply_schema, open_connection
+from .ui import Term
 
 BOOT_DIR = Path(__file__).parent / "_boot"
 DEFAULT_DB = Path(".nemulai") / "nemulai.db"
@@ -103,6 +104,11 @@ def _redact_url(tok: str) -> str:
     return f"{u.scheme}://{marker}{host}{port}{u.path}{tail}"
 
 
+def _term(args: argparse.Namespace) -> Term:
+    color = False if getattr(args, "no_color", False) else None
+    return Term(color=color)
+
+
 def _db(args: argparse.Namespace) -> Path:
     return Path(args.db or os.environ.get("NEMULAI_DB") or DEFAULT_DB)
 
@@ -185,7 +191,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             if not args.no_summary:
                 accounting.run(conn, persp.DEFAULT, _cards(args))
                 print()
-                print(summ.render(summ.build(conn, run_id, persp.DEFAULT)))
+                print(summ.render(summ.build(conn, run_id, persp.DEFAULT), verbose=args.verbose, term=_term(args)))
             conn.close()
         except sqlite3.Error as exc:
             sys.stderr.write(f"nemulai: could not read store for summary: {exc}\n")
@@ -205,7 +211,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
     p = _perspective(args, conn)
     accounting.run(conn, p, _cards(args))
     run_id = _resolve_run(args, conn)
-    print(summ.render(summ.build(conn, run_id, p)))
+    print(summ.render(summ.build(conn, run_id, p), verbose=args.verbose, term=_term(args), heading="SUMMARY"))
     return 0
 
 
@@ -322,7 +328,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
         sys.exit(f"nemulai watch: source {args.source!r} is not supported yet (claude-code only)")
     conn = _open_or_create(args)
     w = Watcher(conn, project=_project_arg(args), all_projects=args.all_projects, history=args.history,
-                interval_s=args.interval, cards=_cards(args))
+                interval_s=args.interval, cards=_cards(args), verbose=args.verbose, term=_term(args))
     w.install_signal_handlers()
     w.run(once=args.once)
     conn.close()
@@ -333,7 +339,8 @@ def cmd_sessions(args: argparse.Namespace) -> int:
     from .agents.report import render_sessions
 
     conn = _open(args)
-    print(render_sessions(conn, _project_arg(args), args.last))
+    print(render_sessions(conn, _project_arg(args), args.last, include_empty=args.include_empty,
+                          detailed=args.detailed, term=_term(args)))
     return 0
 
 
@@ -341,36 +348,28 @@ def cmd_session(args: argparse.Namespace) -> int:
     from .agents.report import render_session, resolve_session_id
 
     conn = _open(args)
-    sid = resolve_session_id(conn, args.session_id)
-    if sid is None:
-        sys.exit(f"nemulai session: no unique session matching {args.session_id!r}")
+    resolved = resolve_session_id(conn, args.session_id)
+    if isinstance(resolved, list):
+        if not resolved:
+            sys.exit(f"nemulai session: no session matches {args.session_id!r}. List them: nemulai sessions")
+        opts = ", ".join(r.split("/")[-1][:12] for r in resolved[:6])
+        sys.exit(f"nemulai session: {args.session_id!r} matches {len(resolved)} sessions ({opts}"
+                 f"{', …' if len(resolved) > 6 else ''}). Use a longer prefix.")
+    sid = resolved
     if args.set_customer is not None or args.set_job is not None:
         conn.execute("UPDATE agent_sessions SET customer_id = COALESCE(?, customer_id),"
                      " job_name = COALESCE(?, job_name) WHERE session_id = ?", (args.set_customer, args.set_job, sid))
         print(f"session {sid[:8]} mapped explicitly: customer {args.set_customer or '(unchanged)'},"
               f" job {args.set_job or '(unchanged)'}")
-    print(render_session(conn, sid, findings_only=args.findings_only))
+    print(render_session(conn, sid, findings_only=args.findings_only, term=_term(args)))
     return 0
 
 
 def cmd_findings(args: argparse.Namespace) -> int:
-    from .agents.report import render_finding
+    from .agents.report import render_findings
 
     conn = _open(args)
-    project = _project_arg(args)
-    where = "" if project is None else " WHERE s.project_path = ?"
-    params: tuple[Any, ...] = () if project is None else (project,)
-    rows = conn.execute(
-        "SELECT f.* FROM agent_findings f JOIN agent_sessions s ON s.session_id = f.session_id"
-        f"{where} ORDER BY f.last_at DESC LIMIT ?", (*params, args.last),
-    ).fetchall()
-    print(f"nemulai findings · {'project ' + project if project else 'all projects'} · {len(rows)} shown"
-          " · each is a potential inefficiency, not a verdict")
-    for f in rows:
-        for line in render_finding(f):
-            print(line)
-    if not rows:
-        print("  none")
+    print(render_findings(conn, _project_arg(args), args.last, term=_term(args)))
     return 0
 
 
@@ -378,8 +377,13 @@ def cmd_findings(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="nemulai", description="Local-first AI workload economics.")
+    ap = argparse.ArgumentParser(
+        prog="nemulai",
+        description="See where your AI work spends time and tokens. NemulAI watches supported workloads locally"
+                    " and highlights repeated failures, repeated reads, and estimated cost.",
+    )
     ap.add_argument("--version", action="version", version=f"nemulai {__version__}")
+    ap.add_argument("--no-color", action="store_true", help="plain output (also honoured: NO_COLOR, non-TTY)")
     sub = ap.add_subparsers(dest="command", required=True)
 
     def common(sp: argparse.ArgumentParser, *, perspective: bool = True) -> None:
@@ -391,6 +395,7 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("run", help="run a command with the harness attached, then print its summary")
     common(r, perspective=False)
     r.add_argument("--no-summary", action="store_true")
+    r.add_argument("--verbose", action="store_true", help="full accounting view instead of the plain summary")
     r.add_argument("cmd", nargs=argparse.REMAINDER)
     r.set_defaults(fn=cmd_run)
 
@@ -398,6 +403,7 @@ def build_parser() -> argparse.ArgumentParser:
     common(s)
     s.add_argument("--run")
     s.add_argument("--all-runs", action="store_true")
+    s.add_argument("--verbose", action="store_true", help="full accounting view: buckets, perspective, rate cards")
     s.set_defaults(fn=cmd_summary)
 
     e = sub.add_parser("events", help="recent attempts")
@@ -431,6 +437,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="initial history: none | all | <N>d | <N>h (default 7d: files modified in the last 7 days)")
     w.add_argument("--interval", type=float, default=2.0, help="poll interval in seconds")
     w.add_argument("--once", action="store_true", help="ingest what exists now and exit")
+    w.add_argument("--verbose", action="store_true", help="show polling internals and per-file ingest counts")
     w.set_defaults(fn=cmd_watch)
 
     ss = sub.add_parser("sessions", help="list observed coding-agent sessions")
@@ -438,6 +445,8 @@ def build_parser() -> argparse.ArgumentParser:
     ss.add_argument("--project")
     ss.add_argument("--all-projects", action="store_true")
     ss.add_argument("--last", type=int, default=20)
+    ss.add_argument("--include-empty", action="store_true", help="also list transcripts with no activity")
+    ss.add_argument("--detailed", action="store_true", help="token and estimated-cost columns")
     ss.set_defaults(fn=cmd_sessions)
 
     so = sub.add_parser("session", help="one session: usage, turns, actions, findings")
