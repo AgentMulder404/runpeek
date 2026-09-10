@@ -60,8 +60,7 @@ tar tzf dist/runpeek-*.tar.gz | less        # no stores, transcripts, exports or
 unzip -l dist/runpeek-*.whl                  # 32 files: package, rates, schema, boot, LICENSE/NOTICE
 ```
 
-Version stays `0.1.0.dev0` until a release version is chosen. A first public
-tag should be a pre-release (e.g. `0.1.0a1`), not a stable version.
+First public version: `0.1.0a1` (a pre-release; `pip install` needs `--pre`).
 
 ## 6. Publishing the package (separate decision; optional trusted publishing)
 

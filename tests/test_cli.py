@@ -189,4 +189,4 @@ def test_inline_program_is_not_stored_and_statuses_are_separate(tmp_path: Path) 
 @pytest.mark.parametrize("flag", ["--version"])
 def test_version(flag: str, tmp_path: Path) -> None:
     r = _run([flag], cwd=tmp_path)
-    assert r.returncode == 0 and "runpeek 0.1.0" in r.stdout
+    assert r.returncode == 0 and "runpeek 0.1.0a1" in r.stdout

@@ -3,7 +3,7 @@
 All notable changes to RunPeek are recorded here. The project is pre-release;
 versions below 1.0 may change interfaces between minor versions.
 
-## Unreleased — first public pre-release (0.1.0.dev0)
+## 0.1.0a1 — 2026-09-10 — first public pre-release
 
 RunPeek is an early, local-first observability harness. It is **not** stable
 or production-proven; interfaces may change before 1.0.
