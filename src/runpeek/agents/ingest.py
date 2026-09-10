@@ -128,8 +128,11 @@ class Ingestor:
             # First sight: history policy decides where to start.
             mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
             if self.history_none or (self.history_since is not None and mtime < self.history_since):
-                offset, line_no = st.st_size, -1  # -1: line numbers unknown from here on
+                # Skipped by the history policy: checkpoint at the end so only new lines are read
+                # later, but create no session row — an unread transcript is not an "empty" session.
                 stats.skipped_history += 1
+                self._checkpoint(tf, st, st.st_size, -1)  # -1: line numbers unknown from here on
+                return stats
         else:
             offset, line_no = int(cp["offset"]), int(cp["line_no"])
             rewritten = (
