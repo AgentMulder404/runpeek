@@ -1,32 +1,143 @@
-# nemulai
+# RunPeek
+### by NemulAI
 
-Local-first observability and efficiency harness for AI workloads.
+**See where your AI spends time and tokens.**
 
-Run an existing Python application under `nemulai run` and get, on your own
-machine, an accounting of every AI call the harness observed: who it was for,
-what it used, what it is estimated to cost, and — just as loudly — what could
-not be measured. No account, no service, no network access for telemetry, and
-no prompt, completion, API-key or request-body capture.
+RunPeek observes supported AI applications and Claude Code sessions locally,
+attributes estimated model costs, and highlights repeated failures and
+repeated work.
 
-**This is milestone M1.** It observes exactly one surface: the OpenAI Python
-SDK's synchronous, non-streaming `chat.completions.create`. See the support
-table before assuming anything else is covered.
+It watches two things: the OpenAI Python SDK calls your own application makes
+(`runpeek run`), and the Claude Code sessions in a project (`runpeek watch`).
+It helps you answer *which customer or job caused these model calls*, *what
+did they consume*, *what would that cost at list prices*, and *where did the
+agent repeat itself*. Collection and analysis run entirely on your machine —
+no account, no service, no uploads, no runtime dependencies.
 
-## Five minutes, offline
+RunPeek is not a model, an agent framework, or a gateway. Its diagnostics are
+deterministic local analysis of what a supported source already records.
+
+**Sample output** (rendered from a test fixture, not a real session):
+
+```
+05:03  REPEATED READ
+       package.json was read 4 times in 2 minutes.
+       No edit to that file was observed between reads.
+       Repeated billing cannot be determined.
+
+       Evidence: runpeek session 719c4032
+
+05:04  REPEATED FAILURE
+       A python3 command failed 4 times consecutively over 46 seconds.
+       No edit or write was observed between the failures.
+       Check the error before repeating the command.
+
+       Evidence: runpeek session 719c4032
+
+05:04  TURN FINISHED
+       51 seconds · 8 tool calls (4 failed) · 8 model calls
+       API-equivalent estimate: $0.115
+       2 potential inefficiencies to review · runpeek session 719c4032
+```
+
+## Install
+
+RunPeek is not on PyPI yet. Install from a checkout:
 
 ```bash
-git clone <this repo> nemulai-harness && cd nemulai-harness
+git clone <path-or-url-of-this-repository> runpeek && cd runpeek
 python -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"            # dev extras bring the openai SDK used by the example
-nemulai run python examples/basic.py
+pip install -e .            # runtime: no dependencies
+pip install -e ".[dev]"     # adds the openai SDK, httpx, pytest, ruff, mypy — needed for the offline demo and tests
 ```
 
-The example is a small "support assistant" that serves three customers through
-the real `openai` client with a local mock transport — no key, no network. When
-it exits, `nemulai run` prints the run's summary:
+Python 3.10+.
+
+## Quickstart A — watch Claude Code
+
+```bash
+runpeek watch --project /path/to/project
+```
+
+Keep using Claude Code normally in that project. The watcher first loads
+recent history (transcripts modified in the last 7 days; `--history all` or
+`--history none`) and summarises any historical findings without replaying
+them as live events. Then it prints only meaningful events: new sessions,
+turns starting and finishing, potential inefficiencies, and collection
+problems. Ctrl-C stops the watcher; your Claude session keeps running.
+
+Review afterwards:
+
+```bash
+runpeek sessions --project /path/to/project     # started, tool calls, errors, model calls, items to review
+runpeek findings --project /path/to/project     # potential inefficiencies, newest first
+runpeek session <session-id>                     # one session: activity, items with evidence, usage and estimate
+```
+
+`--project` defaults to the current directory; `--all-projects` covers every
+project Claude Code has transcripts for. If the filter finds nothing, RunPeek
+says so and names the projects it has collected.
+
+The Claude Code transcript adapter is **experimental**: it reads
+`~/.claude/projects/<project>/*.jsonl` (and `…/<session>/subagents/*.jsonl`),
+whose format is undocumented. It was built against transcripts written by
+Claude Code 2.1.x (CLI 2.1.258 verified) and marks other writer versions as
+`unknown_version`, parsed best-effort.
+
+## Quickstart B — observe a Python AI application
+
+```bash
+export OPENAI_API_KEY=…        # your application's own credentials; RunPeek never reads or stores them
+runpeek run python app.py
+```
+
+Optionally attribute calls from inside your code:
+
+```python
+import runpeek
+
+with runpeek.job(customer="acme", job="support_ticket"):
+    client.chat.completions.create(...)     # observed and attributed
+```
+
+Nested `job()` inherits `customer`; calls outside any `job()` are recorded as
+"No customer tag" — a real row with a real estimate, not a missing one.
+Context follows `await` and `asyncio.create_task`; for threads use
+`runpeek.wrap(fn)`, across processes `runpeek.inject()` / `runpeek.extract()`.
+
+When the application exits, RunPeek prints a summary. Later:
+
+```bash
+runpeek summary                     # latest run (add --verbose for the full accounting ledger)
+runpeek events --last 20            # per-call detail
+runpeek export --format jsonl --out run.jsonl
+runpeek reprice --pin openai-list@2026-09-09   # price under a separate pinned perspective
+```
+
+**Supported SDK surface:** `openai` Python SDK, `client.chat.completions.create`,
+synchronous, non-streaming — tested against `openai==2.44.0`. Streaming calls
+are recorded as observed-but-unmeasured (`stream=True`, no usage); `AsyncOpenAI`,
+the Responses API and other providers are not patched. `runpeek run` works for
+commands that start a CPython interpreter which processes `site` and inherits
+the environment (`python script.py` is tested; `-S`/`-I` and embedded
+interpreters are not covered). If you cannot use `runpeek run`, call
+`runpeek.install()` before importing the provider client.
+
+### Offline demo (no provider account)
+
+```bash
+runpeek run python examples/basic.py
+```
+
+`examples/basic.py` drives the real `openai` client through a local mock
+transport: three customers, an unknown model, a rate-limit error and a
+timeout. It needs the `[dev]` extras; the RunPeek runtime itself has no
+dependencies.
+
+**Sample output** (from that demo):
 
 ```
-NEMULAI / RUN COMPLETE
+RUNPEEK / RUN COMPLETE
 
 python examples/basic.py
 Application exited successfully · telemetry saved
@@ -50,238 +161,138 @@ Missing from this estimate:
 Estimate at list prices — not verified provider billing.
 
 Stored locally · nothing uploaded
-Details: nemulai events · Full accounting: nemulai summary --verbose
+Details: runpeek events · Full accounting: runpeek summary --verbose
 ```
 
-Then:
+## What RunPeek helps you find
 
-```bash
-nemulai summary                     # latest run, default perspective
-nemulai events --last 20            # recent attempts
-nemulai export --format jsonl --out run.jsonl
-nemulai reprice --pin openai-list@2025-08-01   # price under a separate pinned perspective
-```
+- Which customer or job the model calls belonged to, and what they consumed.
+- Calls that could not be priced (unknown model) or measured (errors,
+  streaming, missing usage) — shown beside the estimate, never folded into it.
+- In Claude Code sessions: the same command failing again and again with no
+  edit between attempts; the same file read repeatedly without an observed
+  edit; a tool erroring across many different inputs; one action looping
+  tightly. Each is a *potential* inefficiency with its evidence, a next step,
+  and the limitation needed to read it correctly.
 
-The store is a SQLite file at `./.nemulai/nemulai.db` (override with `--db` or
-`NEMULAI_DB`), created with mode `0600`. Open it with anything.
-
-## Your own application
-
-```bash
-export OPENAI_API_KEY=…             # your key; the harness never reads or stores it
-nemulai run python examples/real_openai.py   # real-provider smoke test, ~$0.0001
-nemulai run python app.py
-```
-
-Attribute calls from inside the code:
-
-```python
-import nemulai
-
-with nemulai.job(customer="acme", job="support_ticket"):
-    client.chat.completions.create(...)     # observed and attributed
-```
-
-Nested `job()` inherits `customer`, gets a fresh `job_id`, and records the
-parent. Calls outside any `job()` are recorded as **unattributed** — a real
-row with a real cost, not a missing one. Context follows `await` and
-`asyncio.create_task`; it does not follow threads — use `nemulai.wrap(fn)`
-for executors and `nemulai.inject()` / `nemulai.extract()` across processes.
-
-If you cannot use `nemulai run`, call `nemulai.install()` before the provider
-client is imported.
-
-## Watching a coding agent (Claude Code)
-
-Run your coding agent normally. In another terminal:
-
-```bash
-nemulai watch                      # this project; transcripts modified in the last 7 days, then live
-nemulai watch --history none       # only what happens from now on
-nemulai watch --all-projects       # every project Claude Code has sessions for
-```
-
-It starts with a short status block, loads recent history (summarised, never
-replayed as if it were happening now), and then prints only meaningful events:
+## How it works
 
 ```
-NEMULAI / LIVE WATCH
-
-Watching Claude Code in AluminatiAi
-Use Claude Code normally. This terminal shows activity
-and potential inefficiencies as they appear.
-
-Local collection · no uploads
-Prompts and file contents are not stored.
-File paths and usage metadata are stored.
-
-Loading recent history…
-Ready · 3 sessions loaded (4 transcript files found, 1 empty)
-Historical: 2 potential inefficiencies in 2 sessions (not replayed here) · nemulai findings --project /Users/dev/AluminatiAi
-
-New activity appears below.
-Ctrl-C stops watching. Your Claude session keeps running.
-
-05:03  REPEATED READ
-       package.json was read 4 times in 2 minutes.
-       No edit to that file was observed between reads.
-       Repeated billing cannot be determined.
-
-       Evidence: nemulai session 719c4032
-
-05:04  TURN FINISHED
-       51 seconds · 8 tool calls (4 failed) · 8 model calls
-       API-equivalent estimate: $0.115
-       2 potential inefficiencies to review · nemulai session 719c4032
+ Python app ──► openai SDK ──► provider        Claude Code ──► ~/.claude/projects/<proj>/*.jsonl
+      │  runpeek run: one patched method,                          │  runpeek watch: read-only polling,
+      │  exactly-once call, fail-open hooks                        │  checkpoints, no duplicates
+      ▼                                                            ▼
+ operations · attempts · observations           sessions · turns · tool calls · usage
+      └────────────► SQLite ./.runpeek/runpeek.db ◄────────────────┘
+                       accounting: charges → dated rate cards → estimates
+                       diagnostics: repeated failure · repeated read · retry loop
+          runpeek summary · events · export     runpeek sessions · session · findings
 ```
 
-Polling internals and per-file counts are behind `--verbose`. Ctrl-C stops it;
-checkpoints mean a restart never duplicates anything. Then:
+More in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and the full design in
+[`docs/DESIGN.md`](docs/DESIGN.md).
 
-```bash
-nemulai sessions                   # this project: started, tool calls, errors, model calls, items to review
-nemulai sessions --detailed        # adds tokens and the API-equivalent estimate per session
-nemulai session <id-prefix>        # activity, turns, potential inefficiencies with evidence, usage and cost
-nemulai findings                   # potential inefficiencies across sessions
-nemulai session <id> --set-customer acme --set-job refactor   # explicit mapping only; never inferred
-```
+## Supported integrations
 
-Supported source: **Claude Code 2.1.x** transcripts (CLI 2.1.258 verified; the
-file format is undocumented, so the adapter is versioned and experimental — other
-writer versions are parsed best-effort and marked `unknown_version`). Codex is
-not yet supported; the capability check and adapter path are in
-[`docs/AGENT_SOURCES.md`](docs/AGENT_SOURCES.md).
-
-What the numbers are:
-
-- **Tokens** are provider-reported per API request, deduplicated by message id
-  (Claude Code writes several transcript entries per streamed response).
-- **≈$ API-equivalent** is a rate-card calculation at Anthropic list prices
-  (`anthropic-list@2026-09-09`). For subscription users it is **not** a charge,
-  a quota, or a saving. Source-reported cost is not available in transcripts
-  (only in Claude Code's OpenTelemetry export, which this does not consume).
-- Sessions belong to a **project**, never to a customer, unless you map them.
-- Agent usage is kept apart from the SDK harness tables and is never added into
-  `nemulai summary`'s totals.
-
-Three checks, all deterministic and local, each reported as a *potential
-inefficiency* with what was observed, evidence, a next step and its limitation.
-Each tool call is counted in at most one item; items grow in place rather than
-duplicating, and the live feed rate-limits updates to one per minute per item.
-
-| Item | Evidence | What it does not claim |
+| Integration | Status | Notes |
 |---|---|---|
-| REPEATED FAILURE | the same command or tool call failed ≥ 3 times with no edit or write observed between | that a command side effect didn't change something |
-| REPEATED READ | the same file read ≥ 3 times with no edit to it observed between | that its contents were re-billed, or any saving |
-| REPEATED TOOL ERRORS / TIGHT LOOP | ≥ 4 consecutive errors from one tool across different inputs inside 10 min, or the same succeeding action ≥ 5 times inside 3 min | that a gap, permission wait or user pause is a stall |
-
-Privacy: only allowlisted metadata is stored — tool name, a relative path /
-program name / host, timestamps, error flag, token counts, and a **keyed
-fingerprint** of the normalised arguments (HMAC with a per-store random key that
-never leaves the store and is excluded from export). No prompts, tool inputs,
-outputs, commands or file contents. Fingerprints are treated as sensitive derived
-data. The store is created `0600`.
-
-Measured on this machine (Apple Silicon, Python 3.12, 2026-09-09) — measurements,
-not targets: idle watcher 0.0 % CPU averaged over 20 s, 18.5 MB RSS; ingest of a
-synthetic 8.4 MB / 10,101-line transcript in 0.27 s wall including interpreter
-start and diagnostics (~37k lines/s); an incremental tick with 100 new lines
-0.14 s wall including interpreter start; live ingest of this project's 80 real
-transcripts (52,311 entries, 9,652 requests) in ~1.0 s.
-
-## What is supported (tested), and what is not
-
-Tested against `openai==2.44.0` (pinned in the dev extras; the adapter's
-claims were verified against that source). Python ≥ 3.10.
-
-| Surface | Status |
-|---|---|
-| `client.chat.completions.create(...)` sync, non-streaming | **supported** (gate G1) |
-| `...create(..., stream=True)` | recorded as an attempt with `unsupported_stream`, no usage, no cost; the stream is returned untouched |
-| `AsyncOpenAI` / `AsyncCompletions` | **not patched** — invisible to M1 |
-| `client.responses.create` | not patched |
-| `with_raw_response.create` | covered when the harness was installed before the property was first accessed (it caches the original bound method otherwise — tested both ways) |
-| Other providers, raw HTTP, other languages | not observed |
-
-| Launch mode (`nemulai run <cmd>`) | Status |
-|---|---|
-| `python script.py`, `python -c` | **tested** |
-| `python -m pkg`, `uvicorn`, `gunicorn`, `celery` | expected to work (they start a CPython interpreter that processes `site` and inherits the environment) — **not yet tested; not claimed** |
-| `python -S` / `-I`, embedded interpreters, launchers that scrub the environment, non-Python processes | **not covered** (tested: `-S` produces no store) |
-| a process that imports `openai` before `site` runs | not covered |
-
-An existing `sitecustomize` elsewhere on `PYTHONPATH` is chained, not
-replaced (tested).
-
-What the SDK layer cannot see, by construction: the SDK retries 408/409/429/5xx,
-timeouts and connection errors up to `max_retries` (default 2) *below* the
-patched method, so one call is one operation and the **last** attempt only.
-Whether an earlier failed attempt was billed is unknowable from the client and
-is reported as `billing: unknown`.
+| OpenAI Python SDK — `chat.completions.create`, sync, non-streaming | **Supported, tested** | `openai==2.44.0`; exactly-once, fail-open |
+| OpenAI — streaming | Observed, not measured | recorded as `unsupported_stream`, no usage, no cost |
+| OpenAI — `AsyncOpenAI`, Responses API | Not supported | not patched; invisible |
+| Claude Code transcripts (2.1.x) | **Supported, experimental** | undocumented format; version-gated adapter |
+| Claude Code source-reported cost | Not available | only in Claude Code's OpenTelemetry export, which RunPeek does not consume |
+| Codex | Not supported | capability check and adapter path in [`docs/AGENT_SOURCES.md`](docs/AGENT_SOURCES.md) |
+| Other providers, raw HTTP, other languages | Not supported | |
+| Dashboards, outcome tracking, run comparison, GPU accounting | Not built | see roadmap |
 
 ## What the numbers mean
 
-- **Known estimated cost** is a list-price estimate under one *perspective*
-  (rate card source + resolution rule). It is not actual spend. Everything that
-  could not be priced is counted beside it: `unpriced` (model not in the rate
-  card), `no_usage` (errors, in-progress, unsupported), `partial` (lower bound).
-- **Unknown is never zero.** A missing usage block, an unknown model, an error
-  or a timeout produce a charge with an unknown or unpriced status, not `$0`.
-- **Rates** come from immutable, dated rate cards. `openai-list@2025-08-01`
-  is unchanged from its first release; `openai-list@2026-09-09` and
-  `anthropic-list@2026-09-09` carry prices as published on their verification
-  date (their `effective_from` is that date, not evidence of when the prices
-  began). Among cards covering an attempt's date the newest wins, so historical
-  estimates keep their card and value (tested). Pass your own with
-  `--rate-card file.json`. The card effective at the attempt's start time is used; a
-  fallback is recorded when none covers it. There is no "latest" default.
-- **Cached and reasoning tokens** are subsets of prompt and completion tokens
-  (per the SDK's usage types) and are never charged twice: cost =
-  (prompt − cached) × input + cached × cached-input + completion × output.
-- **Repricing** creates estimates under a separate pinned perspective; the
-  default perspective's history is preserved. Re-running with identical inputs
-  creates nothing.
-- **Money** is integer nanodollars in the store and lossless decimal strings in
-  the export (`amount_usd`).
-- **Coverage** is reported as instrumentation health, usage coverage, pricing
-  coverage and attribution coverage, each with its denominator. *Capture*
-  coverage — how much AI activity the harness did not see — is `not
-  measurable` without an independent source, and a run with no observations
-  says so rather than implying no spend.
-- **Telemetry loss** is reported per run: confirmed drops (bounded queue,
-  default 10,000), records unflushed at the shutdown deadline (default 5 s),
-  and persist failures. After a crash the run has no end record and the
-  summary says so; loss after the last heartbeat is unknown.
+- **Tokens** are reported by the source — the SDK's usage block, or the usage
+  Claude Code writes into its transcripts — not independently audited.
+- **Estimated cost** is a calculation from those tokens and a dated list-price
+  table ([`docs/PRICING.md`](docs/PRICING.md)). It is *not* your subscription
+  charge, quota usage, a reconciled bill, or a saving. For Claude Code it is
+  labelled "API-equivalent estimate" every time it appears.
+- **Unknown stays unknown.** A call with no usage, an unknown model, an error
+  or a timeout is counted and shown as unpriced or unknown, never as `$0`.
+- **Capture coverage** — how much AI activity RunPeek did not see — is not
+  measurable without an independent source. A run with no observations says
+  "this does not mean none happened".
+- **Findings are potential inefficiencies.** A repeated read shows a file was
+  requested again; whether its contents were billed again is not observable.
+  Only Edit/Write tool calls count as an observed change; command side effects
+  and edits outside the agent are invisible.
+- **Historical vs live.** The watcher summarises history at startup and marks
+  live events with their transcript timestamps; silence is never treated as a
+  stalled agent.
+- **Supported calls only.** RunPeek watches the surfaces listed above, not
+  every AI tool on your machine.
 
-## Guarantees
+## Privacy and local storage
 
-- The wrapped SDK method is invoked exactly once per call; its return value or
-  exception is passed through unchanged. A hook failure before or after the
-  call is counted in `health_events` and never re-issues the call (tested).
-- Hook installation is idempotent (tested).
-- No prompts, completions, request bodies or credentials are recorded. Source
-  observations hold allowlisted usage fields, ids, timing and status only.
-- The application's exit status is preserved; death by signal maps to 128+N.
-  The summary reports **application exit** and **telemetry shutdown** as two
-  separate facts — an app can fail while telemetry ends cleanly, and vice versa.
-- The recorded command line is a redacted description: inline `-c` programs,
-  whitespace-bearing arguments and values of secret-looking options are stored
-  as `<redacted>`, never verbatim.
-- After a crash the run has no final counters; the summary counts what reached
-  the store and says drops/unflushed/persist-failures are unknown.
+Everything lives in `./.runpeek/runpeek.db` (override: `--db`, `RUNPEEK_DB`),
+created `0600`. Stored: ids, timestamps, tool names, relative paths / program
+names / hostnames, token counts, model names, labels you set, and keyed
+fingerprints of tool arguments. Never stored: prompts, completions, tool
+inputs or outputs, commands, file contents, credentials. `runpeek export`
+writes the stored tables as JSONL with exact monetary values. Details and the
+fingerprint caveats: [`docs/PRIVACY.md`](docs/PRIVACY.md).
 
-## Development
+## Known limitations
+
+- One SDK surface and one agent source; see the matrix above.
+- Claude Code transcript format is undocumented; a future Claude Code release
+  may change it. Affected sessions are marked, not silently misread.
+- Turn durations come from the transcript's own end-of-turn record; subagent
+  transcripts have none, so their turns show no duration.
+- The recorded command line for `runpeek run` is redacted heuristically
+  (inline programs, secret-looking values, URLs, payloads); it is not a
+  guarantee.
+- No benchmarks are published yet; performance targets in `docs/DESIGN.md`
+  are targets.
+- The real-provider smoke test (`examples/real_openai.py`) has not been run by
+  the maintainers; it needs your own key and costs a fraction of a cent.
+
+## Development and tests
 
 ```bash
 pip install -e ".[dev]"
-pytest
-ruff check src tests
-mypy
+pytest                          # offline; real openai SDK over httpx.MockTransport
+ruff check src tests examples
+mypy                            # strict
+python -m build                 # sdist + wheel
 ```
 
-Design: `docs/DESIGN.md` (revision 3). Benchmarks in `bench/` are targets
-until measured; none have been measured yet.
+The test suite covers exactly-once and fail-open hooks, fractional-cent
+pricing, cached/reasoning token handling, identity and correlation, idempotent
+estimates and repricing, bounded queue and shutdown, transcript ingestion
+(partial lines, truncation, rotation, restarts, concurrent sessions),
+diagnostics true/false positives, privacy of stored rows and exports, the
+terminal policy, legacy-name migration, and every command the UI prints.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). Please keep tests offline and keep
+unknowns unknown. Security notes: [`SECURITY.md`](SECURITY.md).
+
+## Roadmap (short, not a promise)
+
+- Streaming usage (`stream_options.include_usage`) and async client support,
+  each behind its own tested gate.
+- Outcomes (`runpeek.outcome()`), cost per successful task, and run-to-run
+  comparison with a strict comparability check.
+- A Codex adapter once its session format or a documented interface is pinned.
+- Optional OpenTelemetry receiver for Claude Code's source-reported cost.
+
+## Migration from the NemulAI harness
+
+Names changed; data did not. `runpeek` replaces `nemulai` for the CLI and
+import; `RUNPEEK_*` replaces `NEMULAI_*` (legacy names still honoured); an
+existing `./.nemulai/nemulai.db` is used in place with a notice. Details:
+[`docs/MIGRATION.md`](docs/MIGRATION.md).
 
 ## License
 
-Not yet decided (see `docs/DESIGN.md` §13). Not published to PyPI.
+**Not yet licensed for public distribution.** No license file has been added;
+the maintainers intend to choose one (Apache-2.0 is recommended) before the
+first public release. Until then, all rights are reserved by the authors.

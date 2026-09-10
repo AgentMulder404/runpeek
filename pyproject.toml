@@ -3,11 +3,25 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nemulai-harness"
+name = "runpeek"
 version = "0.1.0.dev0"
-description = "Local-first observability and efficiency harness for AI workloads (M1: OpenAI chat.completions, sync, non-streaming)"
+description = "RunPeek by NemulAI — see where your AI spends time and tokens. Local-first observability for supported AI applications and Claude Code sessions."
 readme = "README.md"
 requires-python = ">=3.10"
+authors = [{ name = "NemulAI" }]
+keywords = ["observability", "llm", "openai", "claude-code", "tokens", "cost", "local-first"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Debuggers",
+  "Topic :: System :: Monitoring",
+]
 dependencies = []
 
 [project.optional-dependencies]
@@ -20,13 +34,16 @@ dev = [
 ]
 
 [project.scripts]
-nemulai = "nemulai.cli:main"
+runpeek = "runpeek.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-nemulai = ["schema.sql", "rates/*.json", "_boot/*.py", "py.typed"]
+runpeek = ["schema.sql", "rates/*.json", "_boot/*.py", "py.typed"]
+
+[tool.setuptools]
+license-files = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -43,5 +60,5 @@ select = ["E", "F", "W", "I", "B", "UP"]
 [tool.mypy]
 python_version = "3.10"
 strict = true
-files = ["src/nemulai"]
+files = ["src/runpeek"]
 ignore_missing_imports = true

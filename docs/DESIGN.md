@@ -14,7 +14,7 @@ source on 2026-09-09; file and line cited) · **unverified** (stated as belief).
 
 Build a local-first harness whose accounting is correct before it is convenient. The first
 milestone is one provider path end to end — the OpenAI Python SDK, `chat.completions.create`,
-synchronous, non-streaming, launched as `nemulai run python script.py` — with the full
+synchronous, non-streaming, launched as `runpeek run python script.py` — with the full
 accounting model underneath it. Streaming, async, the Responses API and server launch modes
 are added through tested gates, not claimed from intent.
 
@@ -114,7 +114,7 @@ added to attempt-level usage that exists for the same operation.
 | **inferred** | same provider+model, start times within `tolerance_ms` (default 2000), usage within `tolerance_tokens` (default 1%) — no shared identifier | **both attempts stay in totals**; the pair is listed under *unresolved potential duplication* with the smaller amount as the possible over-count | reported separately, never subtracted |
 | **conflicting** | exact correlation, but usage differs beyond tolerance | one charge; precedence winner selected; loser retained; flagged | counted once, flagged |
 | **rejected** | operator marked an inferred pair as distinct | both attempts, no listing | — |
-| **confirmed** | operator accepted an inferred pair (`nemulai correlate --accept`) | treated as exact; provenance `operator` | counted once |
+| **confirmed** | operator accepted an inferred pair (`runpeek correlate --accept`) | treated as exact; provenance `operator` | counted once |
 
 Precedence for selection: provider-client hook › proxy/gateway export › framework callback
 › OTel span › user-supplied; within a source, `exact` usage over `estimated`. Values are
@@ -180,7 +180,7 @@ twice.
   version produces a new key; the previous revision gets `superseded_by`. The **current**
   estimate per (charge, perspective) is the newest non-superseded revision. Queries print
   which perspective, rate cards and calc version they used.
-- Repricing is explicit: `nemulai reprice --perspective P [--pin CARD]`. Nothing reprices
+- Repricing is explicit: `runpeek reprice --perspective P [--pin CARD]`. Nothing reprices
   on read.
 
 ### 2.7 Uncertainty dimensions on every estimate
@@ -295,11 +295,11 @@ row per `heartbeat_s`.
 | Buffering | bounded queue (default 10,000); one writer thread per process; batches ≤ 500 rows or 250 ms. |
 | Overload | drop newest; count; one stderr line per minute. |
 | Concurrent writers | one file per host; per-process connection; WAL; `busy_timeout = 5 s`. |
-| Store file | created `0600`; directory `.nemulai/` created `0700`; path from `NEMULAI_DB` or `./.nemulai/nemulai.db`. |
+| Store file | created `0600`; directory `.runpeek/` created `0700`; path from `RUNPEEK_DB` or `./.runpeek/runpeek.db`. |
 | Dashboard (planned v0.2) | binds `127.0.0.1` by default; non-loopback binding requires `--bind` plus a token printed at start; no enterprise identity in OSS v0–v0.2. |
 | Content | prompts and completions are not captured. Opt-in capture (planned) requires a redaction hook and a separately retained table. |
 | Identifier-bearing fields | customer ids, span names, attributes are stored as given and can carry sensitive data; pass opaque ids; deletion (planned v0.1) covers them. |
-| Launch modes | `nemulai run <cmd>` prepends a `sitecustomize` directory to `PYTHONPATH`. **Gated support** (§9): `python script.py` in v0; `python -m`, `uvicorn`, `gunicorn`, `celery` each require their gate test. **Not covered**: `-S`/`-I`, embedded interpreters, environment-scrubbing launchers, non-Python processes, clients imported before `site` ran. |
+| Launch modes | `runpeek run <cmd>` prepends a `sitecustomize` directory to `PYTHONPATH`. **Gated support** (§9): `python script.py` in v0; `python -m`, `uvicorn`, `gunicorn`, `celery` each require their gate test. **Not covered**: `-S`/`-I`, embedded interpreters, environment-scrubbing launchers, non-Python processes, clients imported before `site` ran. |
 | `with_raw_response` | **verified**: `CompletionsWithRawResponse` wraps the *bound* `completions.create` at construction (`resources/chat/completions/completions.py:3187–3195`) and is a `cached_property` (`:72–73`). Covered when the class is patched before the property is first accessed; an already-cached wrapper is not covered and the gate test asserts both cases. |
 
 ---
@@ -340,8 +340,8 @@ record and no terminal, `observed_status = in_progress`. Summary: "1 in-progress
 `diagnostic_status = stale_in_progress`; observed fields untouched.
 
 **E6 — repricing a historical operation.** E1 ran on 2026-08-15. A new card
-`openai-list@2026-09-01` lowers output to $1.20/M. `nemulai summary` still shows $0.0012:
-resolution picks the card effective on 2026-08-15. `nemulai reprice --perspective default
+`openai-list@2026-09-01` lowers output to $1.20/M. `runpeek summary` still shows $0.0012:
+resolution picks the card effective on 2026-08-15. `runpeek reprice --perspective default
 --pin openai-list@2026-09-01` creates estimate revision 2 ($0.0010, `rate_resolution =
 pinned`), supersedes revision 1, and the header now names the pin. Running the same
 command again creates nothing (identical key). Both revisions remain in `explain`.
@@ -351,7 +351,7 @@ command again creates nothing (identical key). Both revisions remain in `explain
 ## 8. CLI summary (target output)
 
 ```
-nemulai · run 7c1e0b  ·  python app.py  ·  ended cleanly in 41.2 s
+runpeek · run 7c1e0b  ·  python app.py  ·  ended cleanly in 41.2 s
 perspective default  ·  rates list  ·  cards openai-list@2026-08-01  ·  calc 1
 
 OPERATIONS        212 attempts (212 operations)        adapters: openai.chat.completions ✓
@@ -364,7 +364,7 @@ COST              $4.8130  estimated, list price   [possible over-count ≤ $0.0
   billing          expected 198 · unknown 14 · confirmed 0
 
 COVERAGE          usage exact 198 / estimated 0 / missing 14   ·   pricing 198 / 203 priced   ·   capture: not measurable
-ATTRIBUTION       by cost: attributed 81.4% · job_only 6.1% · unattributed 12.5% ($0.6020, 27 ops outside nemulai.job)
+ATTRIBUTION       by cost: attributed 81.4% · job_only 6.1% · unattributed 12.5% ($0.6020, 27 ops outside runpeek.job)
 
 BY CUSTOMER                 ops     cost      share
   acme                       96   $2.2110    45.9%
@@ -387,7 +387,7 @@ TELEMETRY         dropped 0 · unflushed 0 · persist failures 0
 ### 9.1 Milestone M1 — one path end to end
 
 OpenAI Python SDK · `chat.completions.create` · synchronous · non-streaming · launched as
-`nemulai run python script.py` · `job()` attribution · SQLite store · `summary`, `events`,
+`runpeek run python script.py` · `job()` attribution · SQLite store · `summary`, `events`,
 `export --format jsonl`.
 
 Why this path: it is the most common call in existing Python applications, its lifecycle is
@@ -413,11 +413,11 @@ they are omitted from the README otherwise.
 ### 9.3 Repository
 
 ```
-nemulai-harness/
+runpeek/
   pyproject.toml            zero runtime deps; dev: pytest, openai, httpx
   README.md                 gates table with status; five-minute path
   docs/DESIGN.md            this document
-  src/nemulai/
+  src/runpeek/
     __init__.py             job, install, inject, extract, wrap
     context.py              Attribution ContextVar; carrier
     ids.py                  id minting; identifier kinds
@@ -457,7 +457,7 @@ nemulai-harness/
 ### 9.5 Acceptance for M1
 
 - All G1 tests green; `tsc`-equivalent hygiene: `ruff`, `mypy --strict` on `src/`.
-- `nemulai run python examples/basic.py` against the mock transport prints a summary whose
+- `runpeek run python examples/basic.py` against the mock transport prints a summary whose
   cost equals the hand-computed value from the example rate card to the cent.
 - An app whose hook raises before the call still receives its response, and the store shows
   the health event.
@@ -524,7 +524,7 @@ other legacy component has been assessed for reuse in this design.
 
 ## 13. Open decisions
 
-1. **PyPI name.** `nemulai` is registered on PyPI at 0.4.1 (`pip index versions`, verified
+1. **PyPI name.** `runpeek` is registered on PyPI at 0.4.1 (`pip index versions`, verified
    2026-09-09). Publishing this project under that name replaces it; a review of existing
    users is required first. Not blocking for M1, which is installable from a git checkout.
 2. **Repository location** and **license** — either choice is compatible with this design.

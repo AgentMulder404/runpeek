@@ -1,4 +1,4 @@
-"""nemulai — run · summary · events · export · reprice."""
+"""runpeek — run · summary · events · export · reprice."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from .store import apply_schema, open_connection
 from .ui import Term
 
 BOOT_DIR = Path(__file__).parent / "_boot"
-DEFAULT_DB = Path(".nemulai") / "nemulai.db"
+DEFAULT_DB = Path(".runpeek") / "runpeek.db"
 
 _SECRET_FLAG_WORDS = ("key", "token", "secret", "password", "passwd", "credential", "auth")
 _SECRET_PREFIXES = ("sk-", "sk_", "pk_", "rk_", "ghp_", "gho_", "github_pat_", "xox", "akia", "aiza", "ya29.", "eyj")
@@ -109,8 +109,37 @@ def _term(args: argparse.Namespace) -> Term:
     return Term(color=color)
 
 
+LEGACY_DB = Path(".nemulai") / "nemulai.db"
+_legacy_notice_shown = False
+
+
+def resolve_db(explicit: str | None) -> tuple[Path, str | None]:
+    """Store path and an optional one-line notice.
+
+    Order: --db, $RUNPEEK_DB, $NEMULAI_DB (legacy), ./.runpeek/runpeek.db,
+    then — only if that does not exist yet — an existing ./.nemulai/nemulai.db.
+    A legacy store is used in place, never copied or overwritten, so data
+    collected before the rename stays visible. See docs/MIGRATION.md.
+    """
+    if explicit:
+        return Path(explicit), None
+    if os.environ.get("RUNPEEK_DB"):
+        return Path(os.environ["RUNPEEK_DB"]), None
+    if os.environ.get("NEMULAI_DB"):
+        return Path(os.environ["NEMULAI_DB"]), "using $NEMULAI_DB (legacy name; set RUNPEEK_DB instead)"
+    if not DEFAULT_DB.exists() and LEGACY_DB.exists():
+        return LEGACY_DB, (f"using legacy store {LEGACY_DB} — move it to {DEFAULT_DB} to silence this"
+                           " (docs/MIGRATION.md)")
+    return DEFAULT_DB, None
+
+
 def _db(args: argparse.Namespace) -> Path:
-    return Path(args.db or os.environ.get("NEMULAI_DB") or DEFAULT_DB)
+    global _legacy_notice_shown
+    path, note = resolve_db(getattr(args, "db", None))
+    if note and not _legacy_notice_shown:
+        _legacy_notice_shown = True
+        sys.stderr.write(f"runpeek: {note}\n")
+    return path
 
 
 def _cards(args: argparse.Namespace) -> RateCardSet:
@@ -124,14 +153,14 @@ def _perspective(args: argparse.Namespace, conn: sqlite3.Connection) -> persp.Pe
         return persp.DEFAULT
     p = persp.load(conn, name)
     if p is None:
-        sys.exit(f"nemulai: unknown perspective {name!r}; create one with `nemulai reprice --pin <rate_card_id>`")
+        sys.exit(f"runpeek: unknown perspective {name!r}; create one with `runpeek reprice --pin <rate_card_id>`")
     return p
 
 
 def _open(args: argparse.Namespace) -> sqlite3.Connection:
     path = _db(args)
     if not path.exists():
-        sys.exit(f"nemulai: no store at {path} (run something with `nemulai run` first, or pass --db)")
+        sys.exit(f"runpeek: no store at {path} (run something with `runpeek run` first, or pass --db)")
     conn = open_connection(path)
     apply_schema(conn)
     return conn
@@ -151,20 +180,20 @@ def _resolve_run(args: argparse.Namespace, conn: sqlite3.Connection) -> str | No
 def cmd_run(args: argparse.Namespace) -> int:
     cmd: list[str] = [c for c in args.cmd if c != "--"] if args.cmd else []
     if not cmd:
-        sys.exit("nemulai run: give a command, e.g. `nemulai run python app.py`")
+        sys.exit("runpeek run: give a command, e.g. `runpeek run python app.py`")
     db = _db(args)
     run_id = new_id("run")
     env = dict(os.environ)
-    env["NEMULAI_ENABLED"] = "1"
-    env["NEMULAI_DB"] = str(db)
-    env["NEMULAI_RUN_ID"] = run_id
-    env["NEMULAI_COMMAND"] = describe_command(cmd)
+    env["RUNPEEK_ENABLED"] = "1"
+    env["RUNPEEK_DB"] = str(db)
+    env["RUNPEEK_RUN_ID"] = run_id
+    env["RUNPEEK_COMMAND"] = describe_command(cmd)
     env["PYTHONPATH"] = str(BOOT_DIR) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
 
     try:
         proc = subprocess.Popen(cmd, env=env)
     except FileNotFoundError:
-        sys.exit(f"nemulai run: command not found: {cmd[0]}")
+        sys.exit(f"runpeek run: command not found: {cmd[0]}")
 
     def forward(signum: int, _frame: Any) -> None:
         try:
@@ -194,11 +223,11 @@ def cmd_run(args: argparse.Namespace) -> int:
                 print(summ.render(summ.build(conn, run_id, persp.DEFAULT), verbose=args.verbose, term=_term(args)))
             conn.close()
         except sqlite3.Error as exc:
-            sys.stderr.write(f"nemulai: could not read store for summary: {exc}\n")
+            sys.stderr.write(f"runpeek: could not read store for summary: {exc}\n")
     if not db.exists():
         sys.stderr.write(
-            "nemulai: no store was created. The command may not have started a Python interpreter that "
-            "processes site, or `nemulai` is not importable by that interpreter.\n"
+            "runpeek: no store was created. The command may not have started a Python interpreter that "
+            "processes site, or `runpeek` is not importable by that interpreter.\n"
         )
     return exit_code
 
@@ -281,7 +310,7 @@ def cmd_reprice(args: argparse.Namespace) -> int:
     conn = _open(args)
     cards = _cards(args)
     if args.pin not in cards.ids():
-        sys.exit(f"nemulai reprice: unknown rate card {args.pin!r}; known: {', '.join(cards.ids())}")
+        sys.exit(f"runpeek reprice: unknown rate card {args.pin!r}; known: {', '.join(cards.ids())}")
     p = persp.pinned(args.pin)
     persp.ensure(conn, p)
     accounting.run(conn, persp.DEFAULT, cards)  # keep the default up to date and untouched
@@ -325,7 +354,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     from .agents.watch import Watcher
 
     if args.source != "claude-code":
-        sys.exit(f"nemulai watch: source {args.source!r} is not supported yet (claude-code only)")
+        sys.exit(f"runpeek watch: source {args.source!r} is not supported yet (claude-code only)")
     conn = _open_or_create(args)
     w = Watcher(conn, project=_project_arg(args), all_projects=args.all_projects, history=args.history,
                 interval_s=args.interval, cards=_cards(args), verbose=args.verbose, term=_term(args))
@@ -351,9 +380,9 @@ def cmd_session(args: argparse.Namespace) -> int:
     resolved = resolve_session_id(conn, args.session_id)
     if isinstance(resolved, list):
         if not resolved:
-            sys.exit(f"nemulai session: no session matches {args.session_id!r}. List them: nemulai sessions")
+            sys.exit(f"runpeek session: no session matches {args.session_id!r}. List them: runpeek sessions")
         opts = ", ".join(r.split("/")[-1][:12] for r in resolved[:6])
-        sys.exit(f"nemulai session: {args.session_id!r} matches {len(resolved)} sessions ({opts}"
+        sys.exit(f"runpeek session: {args.session_id!r} matches {len(resolved)} sessions ({opts}"
                  f"{', …' if len(resolved) > 6 else ''}). Use a longer prefix.")
     sid = resolved
     if args.set_customer is not None or args.set_job is not None:
@@ -378,16 +407,17 @@ def cmd_findings(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="nemulai",
-        description="See where your AI work spends time and tokens. NemulAI watches supported workloads locally"
-                    " and highlights repeated failures, repeated reads, and estimated cost.",
+        prog="runpeek",
+        description="RunPeek by NemulAI — see where your AI spends time and tokens. Observes supported AI"
+                    " applications and Claude Code sessions locally, attributes estimated model costs, and"
+                    " highlights repeated failures and repeated work.",
     )
-    ap.add_argument("--version", action="version", version=f"nemulai {__version__}")
+    ap.add_argument("--version", action="version", version=f"runpeek {__version__}")
     ap.add_argument("--no-color", action="store_true", help="plain output (also honoured: NO_COLOR, non-TTY)")
     sub = ap.add_subparsers(dest="command", required=True)
 
     def common(sp: argparse.ArgumentParser, *, perspective: bool = True) -> None:
-        sp.add_argument("--db", help="store path (default ./.nemulai/nemulai.db or $NEMULAI_DB)")
+        sp.add_argument("--db", help="store path (default ./.runpeek/runpeek.db or $RUNPEEK_DB)")
         sp.add_argument("--rate-card", action="append", metavar="FILE", help="extra rate card JSON (repeatable)")
         if perspective:
             sp.add_argument("--perspective", default="default")

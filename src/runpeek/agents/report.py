@@ -130,7 +130,7 @@ def render_sessions(conn: sqlite3.Connection, project: str | None, last: int = 2
         if project:
             L.append(f"No collected sessions for {sanitize(project)}.")
             L.append("The watcher may be collecting another project.")
-            L.append("Try: nemulai sessions --all-projects")
+            L.append("Try: runpeek sessions --all-projects")
             others = [(p, n) for p, n in known_projects(conn) if p != project]
             if others:
                 L.append("")
@@ -138,7 +138,7 @@ def render_sessions(conn: sqlite3.Connection, project: str | None, last: int = 2
                 for p, n in others[:10]:
                     L.append(f"  {sanitize(p)}  ({n} session{'s' if n != 1 else ''})")
         else:
-            L.append("No sessions collected yet. Start `nemulai watch` in a project and use Claude Code normally.")
+            L.append("No sessions collected yet. Start `runpeek watch` in a project and use Claude Code normally.")
         return "\n".join(L)
 
     ids = short_ids([str(r["session_id"]) for r in shown])
@@ -186,9 +186,9 @@ def render_sessions(conn: sqlite3.Connection, project: str | None, last: int = 2
     L.append("")
     first = parents[0] if parents else shown[0]
     L.append("Review a session:")
-    L.append(f"  nemulai session {ids[str(first['session_id'])]}")
+    L.append(f"  runpeek session {ids[str(first['session_id'])]}")
     if not detailed:
-        L.append("Usage and estimated cost per session: nemulai sessions --detailed")
+        L.append("Usage and estimated cost per session: runpeek sessions --detailed")
     return "\n".join(L)
 
 
@@ -305,7 +305,7 @@ def render_session(conn: sqlite3.Connection, session_id: str, *, findings_only: 
         else:
             L.append("  No model calls with usage were recorded for this session.")
         L.append("")
-    L.append(term.dim("Machine-readable detail: nemulai export --out sessions.jsonl"))
+    L.append(term.dim("Machine-readable detail: runpeek export --out sessions.jsonl"))
     return "\n".join(L)
 
 
@@ -342,7 +342,7 @@ def render_finding(f: sqlite3.Row, term: Term | None = None, *, show_session: bo
         L.append(ln)
     for ln in term.wrap("Limits: " + sanitize(f["limitations"]), indent=4):
         L.append(ln)
-    L.append(f"    Detail: nemulai session {sid}")
+    L.append(f"    Detail: runpeek session {sid}")
     return L
 
 
@@ -360,7 +360,7 @@ def render_findings(conn: sqlite3.Connection, project: str | None, last: int = 5
     if not rows:
         L.append("")
         L.append("None recorded" + (f" for {sanitize(project)}." if project else ".")
-                 + (" Try: nemulai findings --all-projects" if project else ""))
+                 + (" Try: runpeek findings --all-projects" if project else ""))
         return "\n".join(L)
     for f in rows:
         L.extend(render_finding(f, term))

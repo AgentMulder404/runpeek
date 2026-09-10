@@ -36,7 +36,7 @@ _STDERR_INTERVAL_S = 60.0
 
 def _stderr(msg: str) -> None:
     try:
-        sys.stderr.write(f"nemulai: {msg}\n")
+        sys.stderr.write(f"runpeek: {msg}\n")
         sys.stderr.flush()
     except Exception:
         pass
@@ -52,7 +52,7 @@ def open_connection(path: str | Path) -> sqlite3.Connection:
 
 
 def apply_schema(conn: sqlite3.Connection) -> None:
-    sql = (resources.files("nemulai") / "schema.sql").read_text(encoding="utf-8")
+    sql = (resources.files("runpeek") / "schema.sql").read_text(encoding="utf-8")
     conn.executescript(sql)
     # Additive columns for stores created by earlier dev builds. Forward-only.
     cols = {r[1] for r in conn.execute("PRAGMA table_info(runs)")}
@@ -223,7 +223,7 @@ class SQLiteStore:
                 os.chmod(self.path, 0o600)
             except OSError:
                 pass
-        self._thread = threading.Thread(target=self._writer, name="nemulai-writer", daemon=True)
+        self._thread = threading.Thread(target=self._writer, name="runpeek-writer", daemon=True)
         self._thread.start()
         self._started = True
 

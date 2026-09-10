@@ -13,8 +13,8 @@ PROJECT = "/work/cli-project"
 
 def _run(args: list[str], *, cwd: Path, home: Path) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
-    env["NEMULAI_CLAUDE_HOME"] = str(home)
-    return subprocess.run([sys.executable, "-m", "nemulai.cli", *args], cwd=cwd, env=env, capture_output=True,
+    env["RUNPEEK_CLAUDE_HOME"] = str(home)
+    return subprocess.run([sys.executable, "-m", "runpeek.cli", *args], cwd=cwd, env=env, capture_output=True,
                           text=True, timeout=120)
 
 
@@ -29,15 +29,15 @@ def test_watch_once_sessions_session_findings_export(tmp_path: Path) -> None:
 
     r = _run(["watch", "--db", str(db), "--project", PROJECT, "--history", "all", "--once"], cwd=tmp_path, home=home)
     assert r.returncode == 0, r.stderr
-    assert "NEMULAI / LIVE WATCH" in r.stdout and "Watching Claude Code in cli-project" in r.stdout
+    assert "RUNPEEK / LIVE WATCH" in r.stdout and "Watching Claude Code in cli-project" in r.stdout
     assert "Local collection · no uploads" in r.stdout and "Ready · 1 session loaded" in r.stdout
     assert "Historical: 1 potential inefficiencies in 1 session" in r.stdout
-    assert "Done. Loaded 3 tool calls" in r.stdout and f"Review: nemulai sessions --project {PROJECT}" in r.stdout
+    assert "Done. Loaded 3 tool calls" in r.stdout and f"Review: runpeek sessions --project {PROJECT}" in r.stdout
     assert "entries" not in r.stdout  # parser vocabulary never reaches the default screen
 
     s = _run(["sessions", "--db", str(db), "--project", PROJECT], cwd=tmp_path, home=home)
     assert s.returncode == 0 and "RECENT CLAUDE CODE SESSIONS" in s.stdout and t.session_id[:8] in s.stdout
-    assert f"nemulai session {t.session_id[:8]}" in s.stdout and "Tool calls" in s.stdout
+    assert f"runpeek session {t.session_id[:8]}" in s.stdout and "Tool calls" in s.stdout
     sd = _run(["sessions", "--db", str(db), "--project", PROJECT, "--detailed"], cwd=tmp_path, home=home)
     assert "API-equivalent estimate" in sd.stdout and "Est. cost" in sd.stdout
 

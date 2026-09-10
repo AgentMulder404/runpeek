@@ -78,7 +78,7 @@ class Watcher:
         return new
 
     def _review_cmd(self) -> str:
-        return "nemulai sessions --all-projects" if self.all_projects else f"nemulai sessions --project {self.project}"
+        return "runpeek sessions --all-projects" if self.all_projects else f"runpeek sessions --project {self.project}"
 
     def _emit(self, s: str = "") -> None:
         self.out(s)
@@ -86,7 +86,7 @@ class Watcher:
     def banner(self) -> None:
         t = self.term
         scope = "all projects" if self.all_projects else ui.project_name(self.project)
-        self._emit(t.bold("NEMULAI / LIVE WATCH"))
+        self._emit(t.bold("RUNPEEK / LIVE WATCH"))
         self._emit("")
         self._emit(f"Watching Claude Code in {scope}")
         self._emit("Use Claude Code normally. This terminal shows activity")
@@ -143,7 +143,7 @@ class Watcher:
         ).fetchone()
         if hist["n"]:
             self._emit(f"Historical: {hist['n']} potential inefficiencies in {hist['s']} session"
-                       f"{'s' if hist['s'] != 1 else ''} (not replayed here) · nemulai findings"
+                       f"{'s' if hist['s'] != 1 else ''} (not replayed here) · runpeek findings"
                        + (" --all-projects" if self.all_projects else f" --project {self.project}"))
         for sid in stats.unknown_version_sessions:
             self._emit(self.term.amber(f"Note: session {sid[:8]} uses a transcript version this adapter was not"
@@ -258,7 +258,7 @@ class Watcher:
             lines.append(f"API-equivalent estimate: {cost}")
         if t["items"]:
             lines.append(f"{t['items']} potential inefficienc{'ies' if t['items'] != 1 else 'y'} to review"
-                         f" · nemulai session {tf.session_id.split('/')[-1][:8]}")
+                         f" · runpeek session {tf.session_id.split('/')[-1][:8]}")
         self._event("TURN FINISHED", lines, at=p.get("at"))
 
     def _announce_findings(self, delta: diagnostics.Delta) -> None:
@@ -286,7 +286,7 @@ class Watcher:
             else:
                 lines.append(sanitize(f["suggestion"]))
             lines.append("")
-            lines.append(f"Evidence: nemulai session {sid}")
+            lines.append(f"Evidence: runpeek session {sid}")
             self._event(self.term.amber(title), lines, at=f["last_at"])
             self.live_findings += 1
 

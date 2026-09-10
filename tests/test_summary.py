@@ -6,10 +6,10 @@ import httpx
 import openai
 import pytest
 
-import nemulai
+import runpeek
 from conftest import Harness, chat_json, client_for, make_client
-from nemulai import summary as summ
-from nemulai.perspective import DEFAULT
+from runpeek import summary as summ
+from runpeek.perspective import DEFAULT
 
 MSG = [{"role": "user", "content": "hi"}]
 
@@ -24,16 +24,16 @@ def test_buckets_reconcile(harness: Harness) -> None:
         raise httpx.ReadTimeout("t", request=request)
 
     slow = make_client(timeout)
-    with nemulai.job(customer="acme"):
+    with runpeek.job(customer="acme"):
         ok.chat.completions.create(model="gpt-4.1-mini", messages=MSG)
         ok.chat.completions.create(model="gpt-4.1-mini", messages=MSG)
         unknown.chat.completions.create(model="mystery", messages=MSG)
         with pytest.raises(openai.APIError):
             err.chat.completions.create(model="gpt-4.1-mini", messages=MSG)
-    with nemulai.job(customer="globex"):
+    with runpeek.job(customer="globex"):
         ok.chat.completions.create(model="gpt-4.1-mini", messages=MSG)
         nousage.chat.completions.create(model="gpt-4.1-mini", messages=MSG)
-    with nemulai.job(job="batch"):
+    with runpeek.job(job="batch"):
         ok.chat.completions.create(model="gpt-4.1-mini", messages=MSG)
     ok.chat.completions.create(model="gpt-4.1-mini", messages=MSG)
     with pytest.raises(openai.APIError):

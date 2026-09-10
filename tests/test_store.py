@@ -4,7 +4,7 @@ import threading
 from pathlib import Path
 
 from conftest import one
-from nemulai.store import SQLiteStore, open_connection
+from runpeek.store import SQLiteStore, open_connection
 
 
 def _att(kind: str, **extra: object) -> dict[str, object]:

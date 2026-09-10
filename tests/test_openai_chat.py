@@ -6,9 +6,9 @@ import httpx
 import openai
 import pytest
 
-import nemulai
+import runpeek
 from conftest import Harness, chat_json, client_for, make_client, one, rows
-from nemulai.instrumentation import openai_chat
+from runpeek.instrumentation import openai_chat
 
 MSG = [{"role": "user", "content": "hi"}]
 
@@ -20,7 +20,7 @@ def test_sdk_version_is_the_verified_one() -> None:
 def test_normal_priced_call(harness: Harness) -> None:
     client = client_for(chat_json(model="gpt-4.1-mini", prompt_tokens=1000, completion_tokens=500,
                                   object_id="chatcmpl-a1"), request_id="req-a1")
-    with nemulai.job(customer="acme", job="triage"):
+    with runpeek.job(customer="acme", job="triage"):
         r = client.chat.completions.create(model="gpt-4.1-mini", messages=MSG)
     assert r.choices[0].message.content == "ok"
     conn = harness.account()

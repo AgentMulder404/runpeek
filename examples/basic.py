@@ -1,10 +1,10 @@
 """The five-minute path, offline.
 
-    nemulai run python examples/basic.py
+    runpeek run python examples/basic.py
 
 A small "support assistant" that serves three customers. The OpenAI client is
 real; its transport is a local mock, so no key and no network are needed.
-Attribution comes from ``nemulai.job``; the harness sees every call through
+Attribution comes from ``runpeek.job``; the harness sees every call through
 the SDK, exactly as it would in your own application.
 """
 
@@ -18,7 +18,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).parent))
 from _mock_openai import chat_json, scripted_client  # noqa: E402
 
-import nemulai  # noqa: E402
+import runpeek  # noqa: E402
 
 client = scripted_client(
     [
@@ -49,15 +49,15 @@ def ask(model: str, text: str) -> str | None:
 
 def main() -> None:
     print("support assistant (offline demo)")
-    with nemulai.job(customer="acme", job="triage"):
+    with runpeek.job(customer="acme", job="triage"):
         ask("gpt-4.1-mini", "Summarise ticket #101")
         ask("gpt-4.1-mini", "Summarise ticket #102")
-        with nemulai.job(job="escalation"):  # inherits customer=acme
+        with runpeek.job(job="escalation"):  # inherits customer=acme
             ask("gpt-4o", "Draft an escalation for ticket #102")
-    with nemulai.job(customer="globex", job="triage"):
+    with runpeek.job(customer="globex", job="triage"):
         ask("gpt-4.1-mini", "Summarise ticket #201")  # 429
         ask("gpt-4.1-mini", "Summarise ticket #202")
-    with nemulai.job(customer="initech", job="triage"):
+    with runpeek.job(customer="initech", job="triage"):
         ask("acme-preview-1", "Summarise ticket #301")  # model not in the rate card
         ask("gpt-4.1-mini", "Summarise ticket #302")  # timeout
     ask("gpt-4.1-mini", "warm-up ping")  # outside any job: unattributed, and no request id

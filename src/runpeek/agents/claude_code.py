@@ -33,6 +33,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from ..ids import env
 from .events import (
     Event,
     SessionInfo,
@@ -56,7 +57,7 @@ _WEB_TOOLS = {"WebFetch", "WebSearch"}
 
 
 def claude_home() -> Path:
-    return Path(os.environ.get("NEMULAI_CLAUDE_HOME") or Path.home() / ".claude")
+    return Path(env("CLAUDE_HOME") or Path.home() / ".claude")
 
 
 def encode_project_path(project_path: str | Path) -> str:

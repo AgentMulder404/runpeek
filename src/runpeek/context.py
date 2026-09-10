@@ -51,7 +51,7 @@ def attribution_state(customer: str | None, job: str | None) -> str:
 
 
 _current: contextvars.ContextVar[Attribution | None] = contextvars.ContextVar(
-    "nemulai_attribution", default=None
+    "runpeek_attribution", default=None
 )
 
 # Set by bootstrap.install(); receives ("span_start" | "span_end", payload).
@@ -130,13 +130,13 @@ def inject() -> dict[str, str]:
         return {}
     out: dict[str, str] = {}
     if attr.customer is not None:
-        out["nemulai-customer"] = attr.customer
+        out["runpeek-customer"] = attr.customer
     if attr.job is not None:
-        out["nemulai-job"] = attr.job
+        out["runpeek-job"] = attr.job
     if attr.job_id is not None:
-        out["nemulai-job-id"] = attr.job_id
+        out["runpeek-job-id"] = attr.job_id
     for k, v in attr.attributes:
-        out[f"nemulai-attr-{k}"] = v
+        out[f"runpeek-attr-{k}"] = v
     return out
 
 
@@ -147,12 +147,16 @@ def extract(carrier: Mapping[str, str]) -> Iterator[Attribution | None]:
     if not carrier:
         yield _current.get()
         return
-    attrs = {k[len("nemulai-attr-") :]: v for k, v in carrier.items() if k.startswith("nemulai-attr-")}
+    def get(key: str) -> str | None:  # runpeek-* keys, with legacy nemulai-* accepted
+        return carrier.get(f"runpeek-{key}", carrier.get(f"nemulai-{key}"))
+
+    attrs = {k.split("-attr-", 1)[1]: v for k, v in carrier.items()
+             if k.startswith("runpeek-attr-") or k.startswith("nemulai-attr-")}
     attr = Attribution(
-        customer=carrier.get("nemulai-customer"),
-        job=carrier.get("nemulai-job"),
+        customer=get("customer"),
+        job=get("job"),
         job_id=new_id("job"),
-        parent_job_id=carrier.get("nemulai-job-id"),
+        parent_job_id=get("job-id"),
         span_id=None,
         attributes=tuple(sorted(attrs.items())),
     )

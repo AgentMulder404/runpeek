@@ -1,4 +1,4 @@
--- NemulAI harness store, schema version 1.
+-- RunPeek store, schema version 1.
 -- Every statement is idempotent so the file can be applied on every start.
 -- Money is integer nanodollars (see money.py). Timestamps are ISO-8601 UTC text.
 
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS runs (
   unflushed_known   INTEGER,
   persist_failures  INTEGER,
   harness_version   TEXT,
-  app_exit_status   INTEGER                -- written by `nemulai run` after the child exits; negative = -signal; NULL = unknown
+  app_exit_status   INTEGER                -- written by `runpeek run` after the child exits; negative = -signal; NULL = unknown
 );
 
 CREATE TABLE IF NOT EXISTS spans (
@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS health_events (
 CREATE INDEX IF NOT EXISTS ix_health_run ON health_events (run_id);
 
 -- ---------------------------------------------------------------------------
--- Coding-agent observer (nemulai watch). Separate from the SDK harness tables:
+-- Coding-agent observer (runpeek watch). Separate from the SDK harness tables:
 -- agent usage is never mixed into the M1 attempt/charge totals.
 -- Only allowlisted metadata is stored; never prompts, tool payloads or file
 -- contents. Fingerprints are keyed HMACs and are treated as sensitive.
@@ -191,7 +191,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   last_ingested_at    TEXT,
   entries_ingested    INTEGER NOT NULL DEFAULT 0,
   entries_unparseable INTEGER NOT NULL DEFAULT 0,
-  customer_id         TEXT,                      -- explicit mapping only (nemulai session <id> --set-customer)
+  customer_id         TEXT,                      -- explicit mapping only (runpeek session <id> --set-customer)
   job_name            TEXT
 );
 

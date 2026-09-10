@@ -217,7 +217,7 @@ def _signal_name(num: int) -> str:
 
 def _app_status(run: dict[str, Any]) -> str:
     if "app_exit_status" not in run or run.get("app_exit_status") is None:
-        return "application exit: unknown (not launched by `nemulai run`)"
+        return "application exit: unknown (not launched by `runpeek run`)"
     rc = int(run["app_exit_status"])
     if rc < 0:
         return f"application: killed by {_signal_name(-rc)}"
@@ -248,7 +248,7 @@ def render_ledger(s: Summary) -> str:
     """The full accounting view (--verbose)."""
     L: list[str] = []
     run = s.run or {}
-    head = f"nemulai · run {s.run_id or 'all runs'}"
+    head = f"runpeek · run {s.run_id or 'all runs'}"
     if run.get("command"):
         head += f"  ·  {run['command']}"
     L.append(head)
@@ -363,7 +363,7 @@ def render_ledger(s: Summary) -> str:
 def _app_line(run: dict[str, Any]) -> tuple[str, bool]:
     """(sentence, ok)"""
     if "app_exit_status" not in run or run.get("app_exit_status") is None:
-        return "Application exit status unknown (not launched by nemulai run)", True
+        return "Application exit status unknown (not launched by runpeek run)", True
     rc = int(run["app_exit_status"])
     if rc < 0:
         return f"Application killed by {_signal_name(-rc)}", False
@@ -385,7 +385,7 @@ def render(s: Summary, *, verbose: bool = False, term: Term | None = None, headi
     term = term or Term(color=False)
     run = s.run or {}
     L: list[str] = []
-    L.append(term.bold(f"NEMULAI / {heading}"))
+    L.append(term.bold(f"RUNPEEK / {heading}"))
     L.append("")
     if run.get("command"):
         L.append(sanitize(run["command"]))
@@ -473,5 +473,5 @@ def render(s: Summary, *, verbose: bool = False, term: Term | None = None, headi
                             " (sync, non-streaming) is observed in this release."))
     L.append("")
     L.append(term.green("Stored locally · nothing uploaded"))
-    L.append("Details: nemulai events · Full accounting: nemulai summary --verbose")
+    L.append("Details: runpeek events · Full accounting: runpeek summary --verbose")
     return "\n".join(L)

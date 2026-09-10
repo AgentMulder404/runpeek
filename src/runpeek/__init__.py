@@ -1,8 +1,8 @@
 """NemulAI — local-first observability and efficiency harness for AI workloads.
 
-    import nemulai
+    import runpeek
 
-    with nemulai.job(customer="acme", job="support_ticket"):
+    with runpeek.job(customer="acme", job="support_ticket"):
         client.chat.completions.create(...)   # observed, attributed, priced locally
 
 M1 observes the OpenAI Python SDK's synchronous, non-streaming
@@ -20,7 +20,7 @@ __all__ = ["Attribution", "__version__", "current", "extract", "inject", "instal
 
 
 def install(**kwargs: object) -> dict[str, object]:
-    """Manual bootstrap for processes not launched with ``nemulai run``."""
+    """Manual bootstrap for processes not launched with ``runpeek run``."""
     from .bootstrap import install as _install
 
     return _install(**kwargs)  # type: ignore[arg-type]

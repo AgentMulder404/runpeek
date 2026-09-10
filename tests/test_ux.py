@@ -12,14 +12,14 @@ from pathlib import Path
 import pytest
 
 from agent_fixtures import SENTINELS, Transcript
-from nemulai import ui
-from nemulai.agents import claude_code, diagnostics
-from nemulai.agents.ingest import Ingestor
-from nemulai.agents.report import render_findings, render_session, render_sessions, resolve_session_id, short_ids
-from nemulai.agents.watch import Watcher
-from nemulai.cli import build_parser
-from nemulai.store import apply_schema, open_connection
-from nemulai.ui import Term, sanitize
+from runpeek import ui
+from runpeek.agents import claude_code, diagnostics
+from runpeek.agents.ingest import Ingestor
+from runpeek.agents.report import render_findings, render_session, render_sessions, resolve_session_id, short_ids
+from runpeek.agents.watch import Watcher
+from runpeek.cli import build_parser
+from runpeek.store import apply_schema, open_connection
+from runpeek.ui import Term, sanitize
 
 PROJECT = "/work/ux-project"
 NOW = datetime(2026, 9, 9, 18, 0, tzinfo=timezone.utc)
@@ -28,7 +28,7 @@ NOW = datetime(2026, 9, 9, 18, 0, tzinfo=timezone.utc)
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     h = tmp_path / "claude-home"
-    monkeypatch.setenv("NEMULAI_CLAUDE_HOME", str(h))
+    monkeypatch.setenv("RUNPEEK_CLAUDE_HOME", str(h))
     monkeypatch.delenv("NO_COLOR", raising=False)
     return h
 
@@ -105,7 +105,7 @@ def test_history_is_summarised_not_replayed_and_live_findings_dedupe(home: Path,
     assert feed.count("REPEATED FAILURE") == 1
     assert "A cargo command failed 3 times consecutively" in feed
     assert "No edit or write was observed between the failures." in feed
-    assert f"Evidence: nemulai session {t.session_id[:8]}" in feed
+    assert f"Evidence: runpeek session {t.session_id[:8]}" in feed
     n = len(lines)
     t.bash("cargo build", is_error=True, seconds=20)  # grows the same item within the rate limit
     w.tick()
@@ -177,7 +177,7 @@ def test_project_filter_mismatch_names_other_projects(home: Path, conn: sqlite3.
     out = render_sessions(conn, "/somewhere/else", now=NOW)
     assert "No collected sessions for /somewhere/else." in out
     assert "The watcher may be collecting another project." in out
-    assert "Try: nemulai sessions --all-projects" in out
+    assert "Try: runpeek sessions --all-projects" in out
     assert "Sessions have been collected for:" in out and PROJECT in out
     assert t.session_id[:8] not in out  # the filter is stated, not silently changed
 
@@ -260,7 +260,7 @@ def test_finding_wording_and_no_payloads(home: Path, conn: sqlite3.Connection) -
     assert "REPEATED READ" in out and "package.json was read 4 times in 2 minutes." in flat
     assert "No edit to that file was observed between reads." in flat
     assert "Repeated billing cannot be determined" in flat
-    assert "Next: If the file is needed repeatedly" in flat and "Detail: nemulai session" in out
+    assert "Next: If the file is needed repeatedly" in flat and "Detail: runpeek session" in out
     for bad in ("Nothing changed", "wasted", "would save"):
         assert bad not in out
     for s in SENTINELS:
@@ -332,7 +332,7 @@ def test_every_printed_command_parses(home: Path, conn: sqlite3.Connection) -> N
     text += render_sessions(conn, "/none", now=NOW) + "\n" + render_session(conn, t.session_id, now=NOW)
     text += "\n" + render_findings(conn, PROJECT)
     parser = build_parser()
-    cmds = re.findall(r"nemulai [a-z\-]+(?: [^\s`'\"()]+)*", text)
+    cmds = re.findall(r"runpeek [a-z\-]+(?: [^\s`'\"()]+)*", text)
     assert cmds
     for cmd in cmds:
         argv = cmd.split()[1:]

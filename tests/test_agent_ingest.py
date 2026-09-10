@@ -10,10 +10,10 @@ from pathlib import Path
 import pytest
 
 from agent_fixtures import SENTINELS, Transcript, usage_block
-from nemulai.agents import claude_code
-from nemulai.agents.ingest import Ingestor, IngestStats
-from nemulai.agents.watch import Watcher
-from nemulai.store import apply_schema, open_connection
+from runpeek.agents import claude_code
+from runpeek.agents.ingest import Ingestor, IngestStats
+from runpeek.agents.watch import Watcher
+from runpeek.store import apply_schema, open_connection
 
 PROJECT = "/work/example-project"
 
@@ -21,7 +21,7 @@ PROJECT = "/work/example-project"
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     h = tmp_path / "claude-home"
-    monkeypatch.setenv("NEMULAI_CLAUDE_HOME", str(h))
+    monkeypatch.setenv("RUNPEEK_CLAUDE_HOME", str(h))
     return h
 
 
@@ -231,7 +231,7 @@ def test_privacy_nothing_content_like_is_stored(home: Path, conn: sqlite3.Connec
     t.edit("secret_dir/notes.md")
     t.tool_use("WebFetch", {"url": "https://user:SECRET_COMMAND_PAYLOAD@example.com/p?token=SECRET_COMMAND_PAYLOAD"})
     _ingest_all(conn)
-    from nemulai.agents import diagnostics
+    from runpeek.agents import diagnostics
 
     diagnostics.analyse_session(conn, t.session_id)
     conn.commit()
@@ -247,7 +247,7 @@ def test_privacy_nothing_content_like_is_stored(home: Path, conn: sqlite3.Connec
     assert '"target": "curl"' in text and '"target": "secret_dir/notes.md"' in text
     assert '"target": "example.com"' in text
     # and the rendered reports carry none of it either
-    from nemulai.agents.report import render_session, render_sessions
+    from runpeek.agents.report import render_session, render_sessions
 
     rendered = render_sessions(conn, PROJECT) + render_session(conn, t.session_id)
     for s in SENTINELS:
@@ -259,7 +259,7 @@ def test_subscription_labelling_in_reports(home: Path, conn: sqlite3.Connection)
     t.user_prompt()
     t.text()
     _ingest_all(conn)
-    from nemulai.agents.report import render_session, render_sessions
+    from runpeek.agents.report import render_session, render_sessions
 
     detail = " ".join(render_session(conn, t.session_id).split())
     listing = " ".join(render_sessions(conn, PROJECT, detailed=True).split())
@@ -276,7 +276,7 @@ def test_watcher_run_once_and_clean_stop(home: Path, conn: sqlite3.Connection) -
     lines: list[str] = []
     w = Watcher(conn, project=PROJECT, history="all", interval_s=0.05, rescan_s=0.05, out=lines.append)
     totals = w.run(once=True)
-    assert totals.actions == 1 and any("NEMULAI / LIVE WATCH" in ln for ln in lines)
+    assert totals.actions == 1 and any("RUNPEEK / LIVE WATCH" in ln for ln in lines)
     assert any("Prompts and file contents are not stored." in ln for ln in lines)
     # continuous mode: stop from another thread, new session discovered meanwhile.
     # The thread opens its own connection: sqlite3 connections are thread-bound.

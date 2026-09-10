@@ -1,0 +1,46 @@
+name: Bug report
+description: Something RunPeek does is wrong or unclear
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not paste transcripts, prompts, commands with secrets, or store files.
+        Sanitised output from `runpeek --no-color …` is ideal.
+  - type: input
+    id: version
+    attributes:
+      label: RunPeek version and Python version
+      placeholder: "runpeek 0.1.0.dev0 · Python 3.12.3 · macOS 14"
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which part
+      options:
+        - runpeek run / summary (Python SDK harness)
+        - runpeek watch / sessions / findings (Claude Code observer)
+        - pricing / rate cards
+        - export
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands. If it involves Claude Code, the CLI version (`claude --version`).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Sanitised output
+      render: text

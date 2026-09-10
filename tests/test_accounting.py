@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import nemulai
+import runpeek
 from conftest import Harness, chat_json, client_for, one, rows
-from nemulai import accounting
-from nemulai.accounting import Usage, ingest_observation
-from nemulai.perspective import DEFAULT, pinned
-from nemulai.rates import RateCardSet, load_card
+from runpeek import accounting
+from runpeek.accounting import Usage, ingest_observation
+from runpeek.perspective import DEFAULT, pinned
+from runpeek.rates import RateCardSet, load_card
 
 MSG = [{"role": "user", "content": "hi"}]
 
@@ -61,11 +61,11 @@ def test_same_operation_different_requests_stay_distinct(harness: Harness) -> No
     # A proxy saw two HTTP requests for this operation (an internal retry the SDK hid).
     conn.execute("BEGIN")
     a1 = ingest_observation(conn, run_id="r", source="proxy", provider="openai",
-                            identifiers=[("harness_operation_id", "nemulai", op_id),
+                            identifiers=[("harness_operation_id", "runpeek", op_id),
                                          ("http_request_id", "openai.x-request-id", "req-x-first")],
                             usage=Usage(None, None), model_served=None, http_status=500)
     a2 = ingest_observation(conn, run_id="r", source="proxy", provider="openai",
-                            identifiers=[("harness_operation_id", "nemulai", op_id),
+                            identifiers=[("harness_operation_id", "runpeek", op_id),
                                          ("http_request_id", "openai.x-request-id", "req-x")],
                             usage=Usage(100, 100), model_served="gpt-4.1-mini")
     conn.execute("COMMIT")
@@ -134,7 +134,7 @@ def test_new_selection_supersedes_but_keeps_history(harness: Harness) -> None:
 def test_unattributed_call_is_a_first_class_row(harness: Harness) -> None:
     client = client_for(chat_json(prompt_tokens=10, completion_tokens=10))
     client.chat.completions.create(model="gpt-4.1-mini", messages=MSG)
-    with nemulai.job(job="nameless"):
+    with runpeek.job(job="nameless"):
         client.chat.completions.create(model="gpt-4.1-mini", messages=MSG)
     conn = harness.account()
     states = sorted(r["attribution_state"] for r in rows(conn, "SELECT attribution_state FROM operations"))

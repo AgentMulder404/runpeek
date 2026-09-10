@@ -1,4 +1,4 @@
-"""Injected by ``nemulai run`` via PYTHONPATH.
+"""Injected by ``runpeek run`` via PYTHONPATH.
 
 Runs at interpreter start (``site`` processing), before the application
 imports its provider client, so class patching happens first.
@@ -18,13 +18,13 @@ import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-if os.environ.get("NEMULAI_ENABLED") == "1":
+if os.environ.get("RUNPEEK_ENABLED") == "1" or os.environ.get("NEMULAI_ENABLED") == "1":  # legacy name honoured
     try:
-        import nemulai
+        import runpeek
 
-        nemulai.install()
+        runpeek.install()
     except Exception as _exc:  # pragma: no cover - exercised via subprocess tests
-        sys.stderr.write(f"nemulai: bootstrap failed, application runs uninstrumented: {_exc!r}\n")
+        sys.stderr.write(f"runpeek: bootstrap failed, application runs uninstrumented: {_exc!r}\n")
 
 
 def _chain_existing_sitecustomize() -> None:
@@ -36,10 +36,10 @@ def _chain_existing_sitecustomize() -> None:
         return
     try:
         mod = importlib.util.module_from_spec(spec)
-        sys.modules["_nemulai_chained_sitecustomize"] = mod
+        sys.modules["_runpeek_chained_sitecustomize"] = mod
         spec.loader.exec_module(mod)
     except Exception as exc:
-        sys.stderr.write(f"nemulai: chained sitecustomize at {spec.origin} failed: {exc!r}\n")
+        sys.stderr.write(f"runpeek: chained sitecustomize at {spec.origin} failed: {exc!r}\n")
 
 
 _chain_existing_sitecustomize()

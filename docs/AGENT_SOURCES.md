@@ -4,7 +4,7 @@ What each tool exposes, where the evidence came from, and what the observer
 can therefore honestly measure. "Verified" means inspected on this machine or
 read in the tool's official documentation on the date above.
 
-## Claude Code — supported (adapter `nemulai.agents.claude_code`, experimental)
+## Claude Code — supported (adapter `runpeek.agents.claude_code`, experimental)
 
 Installed: `claude` 2.1.258. Transcript files inspected: 14 main + 66 subagent
 files written by 2.1.202–2.1.257, structure only (keys, counts; no content).

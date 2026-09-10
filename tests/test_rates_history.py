@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from nemulai.money import tokens_cost_nanos
-from nemulai.rates import RateCardSet
+from runpeek.money import tokens_cost_nanos
+from runpeek.rates import RateCardSet
 
 
 def _at(s: str) -> datetime:

@@ -23,6 +23,19 @@ PROXY_REQUEST_ID = "proxy_request_id"
 REQUEST_IDENTITY_KINDS = frozenset({PROVIDER_OBJECT_ID, HTTP_REQUEST_ID, PROXY_REQUEST_ID})
 
 
+LEGACY_ENV_PREFIX = "NEMULAI_"
+
+
+def env(name: str, default: str | None = None) -> str | None:
+    """RUNPEEK_<name>, falling back to the legacy NEMULAI_<name> (deprecated, still honoured)."""
+    import os
+
+    v = os.environ.get("RUNPEEK_" + name)
+    if v is None:
+        v = os.environ.get(LEGACY_ENV_PREFIX + name)
+    return default if v is None else v
+
+
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 

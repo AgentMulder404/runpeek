@@ -114,7 +114,7 @@ def _before(kwargs: dict[str, Any]) -> _Pre | None:
         _emit(
             "identifier",
             {
-                "id_kind": HARNESS_OPERATION_ID, "namespace": "nemulai", "value": pre.operation_id,
+                "id_kind": HARNESS_OPERATION_ID, "namespace": "runpeek", "value": pre.operation_id,
                 "subject_kind": "operation", "subject_id": pre.operation_id, "source": SOURCE,
             },
         )
@@ -227,8 +227,8 @@ def _wrap(original: Any) -> Any:
         _after_success(pre, result)
         return result
 
-    create.__nemulai_wrapped__ = True  # type: ignore[attr-defined]
-    create.__nemulai_original__ = original  # type: ignore[attr-defined]
+    create.__runpeek_wrapped__ = True  # type: ignore[attr-defined]
+    create.__runpeek_original__ = original  # type: ignore[attr-defined]
     return create
 
 
@@ -242,7 +242,7 @@ def install(emit: Emitter) -> dict[str, Any]:
         _health("adapter_failed", {"adapter": SURFACE, "error": repr(exc)})
         return {"adapter": SURFACE, "installed": False, "reason": repr(exc)}
     fn = Completions.__dict__.get("create")
-    if fn is not None and getattr(fn, "__nemulai_wrapped__", False):
+    if fn is not None and getattr(fn, "__runpeek_wrapped__", False):
         return {"adapter": SURFACE, "installed": True, "already": True}
     Completions.create = _wrap(Completions.create)  # type: ignore[method-assign]
     _health("adapter_installed", {"adapter": SURFACE, "sdk": _sdk_version()})
@@ -256,7 +256,7 @@ def uninstall() -> None:
     except Exception:
         return
     fn = Completions.__dict__.get("create")
-    orig = getattr(fn, "__nemulai_original__", None)
+    orig = getattr(fn, "__runpeek_original__", None)
     if orig is not None:
         Completions.create = orig  # type: ignore[method-assign]
     _emit = None

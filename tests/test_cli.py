@@ -14,10 +14,10 @@ EXAMPLES = ROOT / "examples"
 
 def _run(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     e = dict(os.environ)
-    e.pop("NEMULAI_ENABLED", None)
+    e.pop("RUNPEEK_ENABLED", None)
     if env:
         e.update(env)
-    return subprocess.run([sys.executable, "-m", "nemulai.cli", *args], cwd=cwd, env=e,
+    return subprocess.run([sys.executable, "-m", "runpeek.cli", *args], cwd=cwd, env=e,
                           capture_output=True, text=True, timeout=120)
 
 
@@ -26,7 +26,7 @@ def test_run_example_then_summary_and_export(tmp_path: Path) -> None:
     r = _run(["run", "--db", str(db), "--", sys.executable, str(EXAMPLES / "basic.py")], cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert "support assistant (offline demo)" in r.stdout
-    assert "NEMULAI / RUN COMPLETE" in r.stdout
+    assert "RUNPEEK / RUN COMPLETE" in r.stdout
     assert "Application exited successfully · telemetry saved" in r.stdout
     assert "8 model calls observed" in r.stdout and "6 completed · 2 failed" in r.stdout
     assert "known estimated API cost" in r.stdout and "5 of 8 calls priced — total is incomplete" in r.stdout
@@ -37,7 +37,7 @@ def test_run_example_then_summary_and_export(tmp_path: Path) -> None:
     assert "will be billed" not in r.stdout and "KNOWN ESTIMATED COST" not in r.stdout
 
     s = _run(["summary", "--db", str(db)], cwd=tmp_path)
-    assert s.returncode == 0 and "NEMULAI / SUMMARY" in s.stdout
+    assert s.returncode == 0 and "RUNPEEK / SUMMARY" in s.stdout
     v = _run(["summary", "--db", str(db), "--verbose"], cwd=tmp_path)
     assert "KNOWN ESTIMATED COST" in v.stdout and "provider_error 2" in v.stdout
 
@@ -108,9 +108,9 @@ def test_crash_leaves_readable_store_and_unclean_run(tmp_path: Path) -> None:
     app = (
         f"import os, sys; sys.path.insert(0, {str(EXAMPLES)!r})\n"
         "from _mock_openai import chat_json, scripted_client\n"
-        "import nemulai\n"
+        "import runpeek\n"
         "c = scripted_client([{'json': chat_json(), 'request_id': 'r'}])\n"
-        "with nemulai.job(customer='acme'):\n"
+        "with runpeek.job(customer='acme'):\n"
         "    c.chat.completions.create(model='gpt-4.1-mini', messages=[{'role':'user','content':'x'}])\n"
         "import time; time.sleep(0.3)\n"  # let the writer commit the attempt
         "os._exit(9)\n"  # no atexit: run never closes
@@ -129,7 +129,7 @@ def test_crash_leaves_readable_store_and_unclean_run(tmp_path: Path) -> None:
 
 
 def test_command_description_redacts_code_and_secrets() -> None:
-    from nemulai.cli import describe_command
+    from runpeek.cli import describe_command
 
     assert describe_command(["python", "app.py", "--verbose"]) == "python app.py --verbose"
     assert describe_command(["python", "-c", "print(open('secret').read())"]) == "python -c <redacted>"
@@ -142,7 +142,7 @@ def test_command_description_redacts_code_and_secrets() -> None:
 
 
 def test_command_description_redacts_urls_positionals_env_and_payloads() -> None:
-    from nemulai.cli import describe_command
+    from runpeek.cli import describe_command
 
     # URL userinfo, query strings and fragments
     assert describe_command(["curl", "https://user:p4ss@api.example.com/v1/x?token=abc#frag"]) == (
@@ -189,4 +189,4 @@ def test_inline_program_is_not_stored_and_statuses_are_separate(tmp_path: Path) 
 @pytest.mark.parametrize("flag", ["--version"])
 def test_version(flag: str, tmp_path: Path) -> None:
     r = _run([flag], cwd=tmp_path)
-    assert r.returncode == 0 and "nemulai 0.1.0" in r.stdout
+    assert r.returncode == 0 and "runpeek 0.1.0" in r.stdout

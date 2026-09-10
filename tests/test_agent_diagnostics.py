@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from agent_fixtures import Transcript
-from nemulai.agents import claude_code, diagnostics
-from nemulai.agents.ingest import Ingestor
-from nemulai.store import apply_schema, open_connection
+from runpeek.agents import claude_code, diagnostics
+from runpeek.agents.ingest import Ingestor
+from runpeek.store import apply_schema, open_connection
 
 PROJECT = "/work/diag"
 
@@ -17,7 +17,7 @@ PROJECT = "/work/diag"
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     h = tmp_path / "claude-home"
-    monkeypatch.setenv("NEMULAI_CLAUDE_HOME", str(h))
+    monkeypatch.setenv("RUNPEEK_CLAUDE_HOME", str(h))
     return h
 
 

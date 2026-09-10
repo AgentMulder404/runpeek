@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from nemulai.money import format_usd, nanos_to_usd, tokens_cost_nanos, usd_string
+from runpeek.money import format_usd, nanos_to_usd, tokens_cost_nanos, usd_string
 
 
 def test_fractional_cent_exact() -> None:

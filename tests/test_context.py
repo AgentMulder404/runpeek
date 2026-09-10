@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from nemulai import context
-from nemulai.context import current, extract, inject, job, wrap
+from runpeek import context
+from runpeek.context import current, extract, inject, job, wrap
 
 
 def test_nested_inherits_customer_and_links_parent() -> None:
@@ -73,7 +73,7 @@ def test_threads_do_not_inherit_but_wrap_carries() -> None:
 def test_inject_extract_roundtrip() -> None:
     with job(customer="acme", job="j", k="v") as a:
         carrier = inject()
-    assert carrier["nemulai-customer"] == "acme"
+    assert carrier["runpeek-customer"] == "acme"
     with extract(carrier) as b:
         assert b is not None
         assert b.customer == "acme" and b.job == "j"

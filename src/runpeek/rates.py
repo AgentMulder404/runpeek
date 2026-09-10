@@ -98,7 +98,7 @@ def load_card(path: Path) -> RateCard:
 
 def load_builtin() -> list[RateCard]:
     cards: list[RateCard] = []
-    pkg = resources.files("nemulai") / "rates"
+    pkg = resources.files("runpeek") / "rates"
     for entry in sorted(pkg.iterdir(), key=lambda e: e.name):
         if entry.name.endswith(".json"):
             cards.append(_parse_card(json.loads(entry.read_text(encoding="utf-8"))))

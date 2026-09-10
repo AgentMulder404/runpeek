@@ -1,0 +1,23 @@
+name: Feature request
+description: A source, diagnostic, or capability RunPeek should have
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to see or decide?
+      description: The question you want answered about your AI workload, not the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: What evidence exists for it?
+      description: |
+        RunPeek only reports what a source actually exposes. If this is a new source
+        (an SDK, an agent, a gateway), where do its usage and events live, and are they
+        documented?
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour (optional)

@@ -12,11 +12,11 @@ import httpx
 import pytest
 from openai import OpenAI
 
-from nemulai import accounting, context
-from nemulai.instrumentation import openai_chat
-from nemulai.perspective import DEFAULT, Perspective
-from nemulai.rates import RateCardSet
-from nemulai.store import SQLiteStore, open_connection
+from runpeek import accounting, context
+from runpeek.instrumentation import openai_chat
+from runpeek.perspective import DEFAULT, Perspective
+from runpeek.rates import RateCardSet
+from runpeek.store import SQLiteStore, open_connection
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples"))
 from _mock_openai import chat_json, make_client  # noqa: E402
@@ -45,7 +45,7 @@ class Harness:
 
 @pytest.fixture
 def harness(tmp_path: Path) -> Iterator[Harness]:
-    db = tmp_path / "nemulai.db"
+    db = tmp_path / "runpeek.db"
     store = SQLiteStore(db, "run_test", command="pytest", queue_size=10_000, batch_ms=20)
     store.start()
     context.set_emitter(store.emit)
