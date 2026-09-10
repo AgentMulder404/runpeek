@@ -157,13 +157,14 @@ def test_truncation_and_rotation(home: Path, conn: sqlite3.Connection) -> None:
     s = _ingest_all(conn)
     assert s.reset_files == 1
     assert _count(conn, "agent_actions") == 3  # 2 old (kept, keyed) + 1 new; nothing duplicated
-    # rotation: same path, new inode
+    # rotation: same path, rewritten from scratch with different leading content. Some filesystems
+    # (Linux ext4) reuse the inode number immediately, so detection must not rely on the inode alone.
     content = t.path.read_text()
     t.path.unlink()
-    t.path.write_text(content)
+    t.path.write_text('{"type": "mode", "mode": "default", "sessionId": "' + t.session_id + '"}\n' + content)
     t.bash("ls")
     s = _ingest_all(conn)
-    assert s.reset_files == 1 and _count(conn, "agent_actions") == 4
+    assert s.reset_files == 1 and _count(conn, "agent_actions") == 4  # re-read from the start, nothing duplicated
 
 
 def test_concurrent_sessions_interleaved(home: Path, conn: sqlite3.Connection) -> None:

@@ -64,6 +64,9 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     if "updated_at" not in fcols:
         conn.execute("ALTER TABLE agent_findings ADD COLUMN updated_at TEXT")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_findings_group ON agent_findings (group_key)")
+    ccols = {r[1] for r in conn.execute("PRAGMA table_info(watch_checkpoints)")}
+    if "head_sha" not in ccols:
+        conn.execute("ALTER TABLE watch_checkpoints ADD COLUMN head_sha TEXT")
 
 
 def _j(obj: Any) -> str | None:

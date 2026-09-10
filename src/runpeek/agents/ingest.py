@@ -40,6 +40,19 @@ from .events import (
 
 CALC_VERSION = 1
 MAX_LINE_BYTES = 16 * 1024 * 1024  # a single line longer than this is skipped, visibly
+HEAD_BYTES = 4096  # hashed at checkpoint time; a changed head means the file was rewritten, not appended
+
+
+def _head_sha(path: Path, limit: int) -> str | None:
+    """sha256 of the first min(limit, HEAD_BYTES) bytes, or None if unreadable."""
+    n = min(limit, HEAD_BYTES)
+    if n <= 0:
+        return None
+    try:
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read(n)).hexdigest()
+    except OSError:
+        return None
 
 
 @dataclass
@@ -107,7 +120,8 @@ class Ingestor:
         except OSError:
             return stats
         cp = self.conn.execute(
-            "SELECT inode, size, offset, line_no FROM watch_checkpoints WHERE transcript_path = ?", (str(tf.path),)
+            "SELECT inode, size, offset, line_no, head_sha FROM watch_checkpoints WHERE transcript_path = ?",
+            (str(tf.path),),
         ).fetchone()
         offset, line_no = 0, 0
         if cp is None:
@@ -118,8 +132,13 @@ class Ingestor:
                 stats.skipped_history += 1
         else:
             offset, line_no = int(cp["offset"]), int(cp["line_no"])
-            if cp["inode"] not in (None, st.st_ino) or st.st_size < offset:
-                # rotation (new inode) or truncation (file shrank): start over; keys make it idempotent
+            rewritten = (
+                cp["inode"] not in (None, st.st_ino)  # rotation with a new inode
+                or st.st_size < offset  # truncation
+                # rewrite that reused the inode (common on Linux): the head bytes no longer match
+                or (cp["head_sha"] is not None and offset > 0 and _head_sha(tf.path, offset) != cp["head_sha"])
+            )
+            if rewritten:
                 offset, line_no = 0, 0
                 stats.reset_files += 1
                 self._parsers.pop(tf.session_id, None)
@@ -180,11 +199,12 @@ class Ingestor:
 
     def _checkpoint(self, tf: TranscriptFile, st: os.stat_result, offset: int, line_no: int) -> None:
         self.conn.execute(
-            "INSERT INTO watch_checkpoints (transcript_path, session_id, inode, size, offset, line_no, updated_at)"
-            " VALUES (?,?,?,?,?,?,?) ON CONFLICT(transcript_path) DO UPDATE SET inode = excluded.inode,"
+            "INSERT INTO watch_checkpoints (transcript_path, session_id, inode, size, offset, line_no, head_sha,"
+            " updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(transcript_path) DO UPDATE SET inode = excluded.inode,"
             " size = excluded.size, offset = excluded.offset, line_no = excluded.line_no,"
-            " updated_at = excluded.updated_at",
-            (str(tf.path), tf.session_id, st.st_ino, st.st_size, offset, line_no, now_iso()),
+            " head_sha = excluded.head_sha, updated_at = excluded.updated_at",
+            (str(tf.path), tf.session_id, st.st_ino, st.st_size, offset, line_no, _head_sha(tf.path, offset),
+             now_iso()),
         )
 
     # --------------------------------------------------------------- sessions

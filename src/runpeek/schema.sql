@@ -274,5 +274,6 @@ CREATE TABLE IF NOT EXISTS watch_checkpoints (
   size            INTEGER,
   offset          INTEGER NOT NULL,              -- byte offset of the first unconsumed line
   line_no         INTEGER NOT NULL,
+  head_sha        TEXT,                          -- sha256 of the first bytes; detects rewrites that reuse an inode
   updated_at      TEXT NOT NULL
 );
