@@ -322,3 +322,30 @@ def test_real_record_parent_and_subagent(home: Path, conn: sqlite3.Connection) -
     totals = (_usage_totals(conn, parent), _usage_totals(conn, child))
     _ingest_all(conn)
     assert (_usage_totals(conn, parent), _usage_totals(conn, child)) == totals
+
+
+def test_usage_without_ordinals_survives_resume_and_reimport(home: Path, conn: sqlite3.Connection) -> None:
+    r = Rollout(home)
+    r.user_turn()
+
+    def strip_ordinals() -> None:
+        records = [json.loads(line) for line in r.path.read_text().splitlines()]
+        for record in records:
+            record.pop("ordinal", None)
+        r.path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    for _ in range(100):
+        r.usage(100, 0, 10)
+    strip_ordinals()
+    _ingest_all(conn)
+    assert _usage_totals(conn, r.thread_id) == (100, 10000, 0, 1000)
+    for _ in range(5):
+        r.usage(100, 0, 10)
+    strip_ordinals()
+    _ingest_all(conn)  # new ingestor primes previous cumulative totals
+    assert _usage_totals(conn, r.thread_id) == (105, 10500, 0, 1050)
+    ids = {row[0] for row in conn.execute("SELECT usage_id FROM agent_usage")}
+    conn.execute("UPDATE watch_checkpoints SET offset = 0, line_no = 0")
+    _ingest_all(conn)
+    assert _usage_totals(conn, r.thread_id) == (105, 10500, 0, 1050)
+    assert {row[0] for row in conn.execute("SELECT usage_id FROM agent_usage")} == ids

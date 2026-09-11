@@ -287,3 +287,50 @@ def test_cli_work_flow(tmp_path: Path, homes: tuple[Path, Path]) -> None:
     bad = _run(["work", "status", wid, "--status", "closed", "--outcome", "shipped", "--db", str(db)], cwd=tmp_path,
                homes=homes)
     assert bad.returncode != 0
+
+
+def test_nested_assignments_overrides_and_cycles(conn: sqlite3.Connection,
+                                                 homes: tuple[Path, Path]) -> None:
+    _, cx = homes
+    root = Rollout(cx, start=SEPT)
+    child = Rollout(cx, parent=root, start=SEPT)
+    grandchild = Rollout(cx, parent=child, start=SEPT)
+    for rollout in (root, child, grandchild):
+        rollout.user_turn()
+        rollout.usage(100, 0, 10)
+    # Deliberately ingest descendants first to test order independence.
+    files = {tf.session_id: tf for tf in codex.discover(PROJECT)}
+    ing = Ingestor(conn)
+    for rollout in (grandchild, child, root):
+        ing.ingest(files[rollout.thread_id])
+    first = work.create(conn, "Root work", "feature")
+    second = work.create(conn, "Child work", "task")
+    work.assign(conn, first, [root.thread_id])
+    assert work.build_report(conn, first).total.calls == 3
+    assert work.effective_assignment(conn, grandchild.thread_id) == (first, "via_parent")
+    assert work.assignment_map(conn)[grandchild.thread_id] == (first, "via_parent")
+    work.assign(conn, second, [child.thread_id])
+    assert work.build_report(conn, first).total.calls == 1
+    assert work.build_report(conn, second).total.calls == 2
+    assert work.assignment_map(conn)[grandchild.thread_id] == (second, "via_parent")
+    work.unassign(conn, [child.thread_id])
+    assert work.build_report(conn, first).total.calls == 3
+    work.unassign(conn, [root.thread_id])
+    conn.execute("UPDATE agent_sessions SET parent_session_id = ? WHERE session_id = ?",
+                 (grandchild.thread_id, root.thread_id))
+    assert work.assignment_map(conn) == {}
+    assert work.effective_assignment(conn, grandchild.thread_id) == (None, "none")
+
+
+def test_unpriced_agent_share_is_unknown(conn: sqlite3.Connection, homes: tuple[Path, Path]) -> None:
+    ids = _feature(conn, homes)
+    wid = work.create(conn, "Mixed pricing", "feature")
+    work.assign(conn, wid, [ids["cc"], ids["cx"]])
+    conn.execute("UPDATE agent_usage SET api_equiv_nanos = NULL, api_equiv_status = 'unpriced'"
+                 " WHERE session_id = ?", (ids["cx"],))
+    text = work.render_report(work.build_report(conn, wid))
+    agent_section = text.split("BY AGENT", 1)[1].split("BY MODEL", 1)[0]
+    codex_line = next(line for line in agent_section.splitlines() if "Codex" in line)
+    assert "unknown" in codex_line
+    assert "0.0%" not in codex_line
+    assert "Share of priced subtotal" in agent_section

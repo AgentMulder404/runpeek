@@ -44,6 +44,7 @@ statement below is "verified on disk", not "documented".
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -289,7 +290,7 @@ class Parser:
             if isinstance(tid, str):
                 yield from self._start_turn(tid, ts)
         elif t == "event_msg":
-            yield from self._event_msg(p, ts, ordinal)
+            yield from self._event_msg(p, ts, ordinal, e)
         elif t == "response_item":
             yield from self._response_item(p, ts)
         elif t == "token_usage_record":
@@ -318,7 +319,8 @@ class Parser:
         self._seen_turns.add(turn_id)
         yield TurnStartEvent(turn_id, ts)
 
-    def _event_msg(self, p: dict[str, Any], ts: str | None, ordinal: int | None) -> Iterator[Event]:
+    def _event_msg(self, p: dict[str, Any], ts: str | None, ordinal: int | None,
+                   record: dict[str, Any]) -> Iterator[Event]:
         kind = p.get("type")
         if kind == "task_started":
             tid = p.get("turn_id")
@@ -340,11 +342,12 @@ class Parser:
             if isinstance(settings, dict) and isinstance(settings.get("model"), str):
                 self.model = settings["model"]
         elif kind == "token_count":
-            yield from self._token_count(p, ts, ordinal)
+            yield from self._token_count(p, ts, ordinal, record)
         elif kind == "item_completed":
             yield from self._item(p, ts)
 
-    def _token_count(self, p: dict[str, Any], ts: str | None, ordinal: int | None) -> Iterator[Event]:
+    def _token_count(self, p: dict[str, Any], ts: str | None, ordinal: int | None,
+                     record: dict[str, Any]) -> Iterator[Event]:
         info = p.get("info")
         if not isinstance(info, dict):
             return  # rate-limit-only event, no usage
@@ -374,7 +377,12 @@ class Parser:
         uncached = max(delta["input_tokens"] - cached, 0)
         rid = self._pending_request_id
         self._pending_request_id = None
-        usage_id = f"{self.session_id}:{ordinal if ordinal is not None else 'l' + str(id(p))}"
+        # Older/best-effort records may lack ordinals. Hash the complete source
+        # record (including cumulative totals), never a process-local object ID.
+        key = str(ordinal) if ordinal is not None else "sha256:" + hashlib.sha256(
+            json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        usage_id = f"{self.session_id}:{key}"
         yield UsageEvent(
             usage_id=usage_id,
             request_id=rid,

@@ -197,49 +197,43 @@ def unassign(conn: sqlite3.Connection, session_ids: list[str]) -> list[tuple[str
 
 
 def effective_assignment(conn: sqlite3.Connection, session_id: str) -> tuple[str | None, str]:
-    """(work_item_id, how) — how ∈ explicit | via_parent | none."""
-    row = conn.execute("SELECT work_item_id FROM work_item_sessions WHERE session_id = ?", (session_id,)).fetchone()
-    if row:
-        return str(row["work_item_id"]), "explicit"
-    s = conn.execute("SELECT parent_session_id FROM agent_sessions WHERE session_id = ?", (session_id,)).fetchone()
-    if s and s["parent_session_id"]:
-        p = conn.execute("SELECT work_item_id FROM work_item_sessions WHERE session_id = ?",
-                         (s["parent_session_id"],)).fetchone()
-        if p:
-            return str(p["work_item_id"]), "via_parent"
+    """Resolve the nearest explicit ancestor, stopping safely on malformed cycles."""
+    seen: set[str] = set()
+    current = session_id
+    while current not in seen:
+        seen.add(current)
+        row = conn.execute("SELECT work_item_id FROM work_item_sessions WHERE session_id = ?",
+                           (current,)).fetchone()
+        if row:
+            return str(row["work_item_id"]), "explicit" if current == session_id else "via_parent"
+        parent = conn.execute("SELECT parent_session_id FROM agent_sessions WHERE session_id = ?",
+                              (current,)).fetchone()
+        if parent is None or not parent["parent_session_id"]:
+            break
+        current = str(parent["parent_session_id"])
     return None, "none"
 
 
 def effective_sessions(conn: sqlite3.Connection, wid: str) -> list[tuple[sqlite3.Row, str]]:
-    """Sessions counted under a work item: explicit ones plus their subagents that are not
-    explicitly assigned elsewhere. Each session appears once."""
-    explicit = conn.execute(
-        "SELECT s.* FROM work_item_sessions w JOIN agent_sessions s ON s.session_id = w.session_id"
-        " WHERE w.work_item_id = ? ORDER BY COALESCE(s.first_event_at, s.first_seen_at)", (wid,)).fetchall()
-    seen = {str(r["session_id"]) for r in explicit}
-    out: list[tuple[sqlite3.Row, str]] = [(r, "explicit") for r in explicit]
-    for r in explicit:
-        subs = conn.execute(
-            "SELECT s.* FROM agent_sessions s LEFT JOIN work_item_sessions w ON w.session_id = s.session_id"
-            " WHERE s.parent_session_id = ? AND w.session_id IS NULL"
-            " ORDER BY COALESCE(s.first_event_at, s.first_seen_at)", (r["session_id"],)).fetchall()
-        for sub in subs:
-            if str(sub["session_id"]) not in seen:
-                seen.add(str(sub["session_id"]))
-                out.append((sub, "via_parent"))
+    """Use the same ancestry resolution for reports and assignment views."""
+    out: list[tuple[sqlite3.Row, str]] = []
+    for session in conn.execute(
+        "SELECT * FROM agent_sessions ORDER BY COALESCE(first_event_at, first_seen_at)"
+    ).fetchall():
+        owner, how = effective_assignment(conn, str(session["session_id"]))
+        if owner == wid:
+            out.append((session, how))
     return out
 
 
 def assignment_map(conn: sqlite3.Connection) -> dict[str, tuple[str, str]]:
-    """session_id → (work_item_id, how) for every effectively assigned session."""
+    """session_id → (work_item_id, how), independent of insertion order."""
     out: dict[str, tuple[str, str]] = {}
-    for w in conn.execute("SELECT session_id, work_item_id FROM work_item_sessions"):
-        out[str(w["session_id"])] = (str(w["work_item_id"]), "explicit")
-    for s in conn.execute("SELECT session_id, parent_session_id FROM agent_sessions"
-                          " WHERE parent_session_id IS NOT NULL"):
-        sid, parent = str(s["session_id"]), str(s["parent_session_id"])
-        if sid not in out and parent in out:
-            out[sid] = (out[parent][0], "via_parent")
+    for session in conn.execute("SELECT session_id FROM agent_sessions").fetchall():
+        sid = str(session["session_id"])
+        owner, how = effective_assignment(conn, sid)
+        if owner is not None:
+            out[sid] = (owner, how)
     return out
 
 
@@ -536,10 +530,12 @@ def render_report(r: Report, *, term: Term | None = None, trace: int = 0, conn: 
     # ---- breakdowns
     if t.calls:
         L.append(term.bold("BY AGENT"))
-        L.append(f"  {'Agent':<14}{'Sessions':>9}{'Calls':>8}{'Est. cost':>14}{'Share':>8}  Unpriced")
+        L.append("  * Share of priced subtotal only; unknown costs are excluded.")
+        L.append(f"  {'Agent':<14}{'Sessions':>9}{'Calls':>8}{'Est. cost':>14}{'Share*':>8}  Unpriced")
         for src, b in sorted(r.by_agent.items(), key=lambda kv: -kv[1].cost_nanos):
             n_s = sum(1 for ln in r.sessions if ln.source == src)
-            share = f"{100 * b.cost_nanos / t.cost_nanos:.1f}%" if t.cost_nanos else "—"
+            share = (f"{100 * b.cost_nanos / t.cost_nanos:.1f}%"
+                     if t.cost_nanos and b.priced_calls else "unknown" if b.calls else "—")
             L.append(f"  {_label(src):<14}{n_s:>9}{b.calls:>8}{_cost_cell(b):>14}{share:>8}"
                      f"  {b.unpriced_calls + b.no_usage_calls or ''}")
         L.append("")
@@ -553,11 +549,12 @@ def render_report(r: Report, *, term: Term | None = None, trace: int = 0, conn: 
                  + (f", {r.subagent_count} subagent{'s' if r.subagent_count != 1 else ''} included via parent"
                     if r.subagent_count else "") + ")")
         L.append(f"  {'Started':<18}{'Session':<14}{'Agent':<12}{'Calls':>7}{'Tools':>7}{'Failed':>7}"
-                 f"{'Est. cost':>14}{'Share':>8}  Notes")
+                 f"{'Est. cost':>14}{'Share*':>8}  Notes")
         for ln_ in sorted(r.sessions, key=lambda x: -x.bucket.cost_nanos):
             b = ln_.bucket
             short = ln_.session_id.split("/")[-1][:12]
-            share = f"{100 * b.cost_nanos / t.cost_nanos:.1f}%" if t.cost_nanos and b.priced_calls else "—"
+            share = (f"{100 * b.cost_nanos / t.cost_nanos:.1f}%"
+                     if t.cost_nanos and b.priced_calls else "unknown" if b.calls else "—")
             notes: list[str] = []
             if ln_.how == "via_parent":
                 notes.append(f"subagent of {str(ln_.parent_session_id).split('/')[-1][:8]}")

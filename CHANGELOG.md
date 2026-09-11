@@ -3,6 +3,18 @@
 All notable changes to RunPeek are recorded here. The project is pre-release;
 versions below 1.0 may change interfaces between minor versions.
 
+## Unreleased — accounting review fixes
+
+- Use deterministic source-record hashes for Codex usage without ordinals so
+  separate calls are retained and reimports remain idempotent.
+- Include nested subagents using the nearest explicit ancestor assignment;
+  reports and assignment views agree, including overrides and malformed cycles.
+- Label spending shares as shares of the priced subtotal and display unknown
+  costs explicitly.
+- Existing stores imported with the old memory-address IDs are not repaired
+  automatically. Rebuild affected accounting in a fresh store from the original
+  transcripts; preserve work-item assignments before replacing an old store.
+
 ## 0.2.0a1 — 2026-09-10 — work items, Codex, trustworthy cross-agent accounting
 
 Coding-agent accounting is now the primary product. The SDK harness
