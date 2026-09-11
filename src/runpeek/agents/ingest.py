@@ -25,7 +25,7 @@ from typing import Any
 from ..ids import new_id, now_iso
 from ..money import tokens_cost_nanos
 from ..rates import RateCardSet
-from . import claude_code
+from . import claude_code, codex
 from .events import (
     Event,
     SessionInfo,
@@ -39,6 +39,9 @@ from .events import (
 )
 
 CALC_VERSION = 1
+# Source adapters. Each exposes SOURCE, PROVIDER, LABEL, RECORDS_LABEL, Parser, discover, version_supported.
+ADAPTERS: dict[str, Any] = {claude_code.SOURCE: claude_code, codex.SOURCE: codex}
+SOURCES = tuple(ADAPTERS)
 MAX_LINE_BYTES = 16 * 1024 * 1024  # a single line longer than this is skipped, visibly
 HEAD_BYTES = 4096  # hashed at checkpoint time; a changed head means the file was rewritten, not appended
 
@@ -68,6 +71,7 @@ class IngestStats:
     skipped_history: int = 0
     unknown_version_sessions: list[str] = field(default_factory=list)
     oversized_lines: int = 0
+    duplicate_usage: int = 0  # usage records already counted under another session
 
 
 def fingerprint_key(conn: sqlite3.Connection) -> bytes:
@@ -107,7 +111,7 @@ class Ingestor:
         self.key = fingerprint_key(conn)
         self.history_since = history_since
         self.history_none = history_none
-        self._parsers: dict[str, claude_code.Parser] = {}
+        self._parsers: dict[str, Any] = {}
         self._seq: dict[str, int] = {}
 
     # ------------------------------------------------------------------ files
@@ -151,11 +155,12 @@ class Ingestor:
         stats.files_changed += 1
         parser = self._parsers.get(tf.session_id)
         if parser is None:
-            parser = claude_code.Parser(tf.session_id)
+            parser = ADAPTERS[tf.source].Parser(tf.session_id)
             self._parsers[tf.session_id] = parser
             if offset > 0:
-                # resuming mid-file: recover cwd/version cheaply from the first line
-                self._prime(parser, tf.path)
+                # resuming mid-file: replay the already-consumed prefix through the parser (events discarded)
+                # so stateful adapters — cumulative totals, current turn, model — continue where they left off
+                self._prime(parser, tf.path, offset)
         self._ensure_session(tf)
         self.conn.execute("BEGIN")
         try:
@@ -187,16 +192,22 @@ class Ingestor:
             raise
         return stats
 
-    def _prime(self, parser: claude_code.Parser, path: Path) -> None:
+    def _prime(self, parser: Any, path: Path, offset: int) -> None:
         try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                for i, line in enumerate(fh):
-                    for _ in parser.parse_line(line, i):
-                        pass
-                    if parser.cwd and parser.version:
+            with open(path, "rb") as fh:
+                consumed = 0
+                i = 0
+                while consumed < offset:
+                    line = fh.readline()
+                    if not line:
                         break
-                    if i > 50:
-                        break
+                    consumed += len(line)
+                    if len(line) <= MAX_LINE_BYTES:
+                        text = line.decode("utf-8", errors="replace")
+                        if text.strip():
+                            for _ in parser.parse_line(text, i):
+                                pass
+                    i += 1
         except OSError:
             pass
 
@@ -215,9 +226,9 @@ class Ingestor:
     def _ensure_session(self, tf: TranscriptFile) -> None:
         self.conn.execute(
             "INSERT OR IGNORE INTO agent_sessions (session_id, source, project_path, transcript_path,"
-            " parent_session_id, is_subagent, first_seen_at) VALUES (?,?,?,?,?,?,?)",
-            (tf.session_id, claude_code.SOURCE, tf.project_path, str(tf.path), tf.parent_session_id,
-             1 if tf.is_subagent else 0, now_iso()),
+            " parent_session_id, is_subagent, first_seen_at, provider) VALUES (?,?,?,?,?,?,?,?)",
+            (tf.session_id, tf.source, tf.project_path, str(tf.path), tf.parent_session_id,
+             1 if tf.is_subagent else 0, now_iso(), ADAPTERS[tf.source].PROVIDER),
         )
         if tf.session_id not in self._seq:
             row = self.conn.execute(
@@ -225,16 +236,23 @@ class Ingestor:
             ).fetchone()
             self._seq[tf.session_id] = int(row[0])
 
-    def _finish_session(self, tf: TranscriptFile, parser: claude_code.Parser, stats: IngestStats) -> None:
-        status = "supported" if claude_code.version_supported(parser.version) else "unknown_version"
+    def _finish_session(self, tf: TranscriptFile, parser: Any, stats: IngestStats) -> None:
+        adapter = ADAPTERS[tf.source]
+        status = "supported" if adapter.version_supported(parser.version) else "unknown_version"
         if status == "unknown_version" and tf.session_id not in stats.unknown_version_sessions:
             stats.unknown_version_sessions.append(tf.session_id)
+        counters = getattr(parser, "counters", None)
         self.conn.execute(
             "UPDATE agent_sessions SET source_version = COALESCE(?, source_version), format_status = ?,"
             " project_path = COALESCE(project_path, ?), last_ingested_at = ?,"
-            " entries_ingested = entries_ingested + ?, entries_unparseable = entries_unparseable + ?"
+            " entries_ingested = entries_ingested + ?, entries_unparseable = entries_unparseable + ?,"
+            " git_branch = COALESCE(git_branch, ?), repository_url = COALESCE(repository_url, ?),"
+            " provider = COALESCE(provider, ?), usage_consistency = ?"
             " WHERE session_id = ?",
-            (parser.version, status, parser.cwd, now_iso(), stats.entries, stats.unparseable, tf.session_id),
+            (parser.version, status, parser.cwd, now_iso(), stats.entries, stats.unparseable,
+             getattr(parser, "git_branch", None), getattr(parser, "repository_url", None),
+             getattr(parser, "provider", adapter.PROVIDER),
+             json.dumps(counters, sort_keys=True) if counters else None, tf.session_id),
         )
         # derived bounds from what is stored
         self.conn.execute(
@@ -255,7 +273,7 @@ class Ingestor:
 
     # ----------------------------------------------------------------- events
 
-    def _apply(self, tf: TranscriptFile, parser: claude_code.Parser, ev: Event, stats: IngestStats) -> None:
+    def _apply(self, tf: TranscriptFile, parser: Any, ev: Event, stats: IngestStats) -> None:
         sid = tf.session_id
         if isinstance(ev, Unparseable):
             stats.unparseable += 1
@@ -270,14 +288,14 @@ class Ingestor:
             if cur.rowcount > 0:
                 self._emit("turn_start", tf, {"turn_id": ev.turn_id, "at": ev.at})
         elif isinstance(ev, TurnDurationEvent):
-            if parser.current_turn:
+            turn_id = ev.turn_id or parser.current_turn
+            if turn_id:
                 self.conn.execute(
                     "UPDATE agent_turns SET duration_ms = COALESCE(?, duration_ms), ended_at = COALESCE(?, ended_at)"
                     " WHERE turn_id = ?",
-                    (ev.duration_ms, ev.at, parser.current_turn),
+                    (ev.duration_ms, ev.at, turn_id),
                 )
-                self._emit("turn_end", tf, {"turn_id": parser.current_turn, "at": ev.at,
-                                            "duration_ms": ev.duration_ms})
+                self._emit("turn_end", tf, {"turn_id": turn_id, "at": ev.at, "duration_ms": ev.duration_ms})
         elif isinstance(ev, ToolUseEvent):
             fp = fingerprint(self.key, ev.fingerprint_input)
             self._seq[sid] = self._seq.get(sid, 0) + 1
@@ -301,7 +319,7 @@ class Ingestor:
                 " duration_ms = CASE WHEN requested_at IS NOT NULL AND ? IS NOT NULL THEN"
                 "   (julianday(?) - julianday(requested_at)) * 86400000.0 ELSE duration_ms END"
                 " WHERE action_id = ?",
-                (ev.at, 1 if ev.is_error else 0, ev.at, ev.at, ev.tool_use_id),
+                (ev.at, None if ev.is_error is None else (1 if ev.is_error else 0), ev.at, ev.at, ev.tool_use_id),
             )
         elif isinstance(ev, UsageEvent):
             if self._usage(sid, parser, ev, stats):
@@ -322,14 +340,29 @@ class Ingestor:
         self._active.add(tf.session_id)
         self._emit("activity", tf, {"at": at})
 
-    def _usage(self, sid: str, parser: claude_code.Parser, ev: UsageEvent, stats: IngestStats) -> bool:
+    def _usage(self, sid: str, parser: Any, ev: UsageEvent, stats: IngestStats) -> bool:
+        owner = self.conn.execute("SELECT session_id FROM agent_usage WHERE usage_id = ?", (ev.usage_id,)).fetchone()
+        if owner is not None:
+            if owner["session_id"] != sid:
+                # A resumed or forked transcript replays history that is already counted under another
+                # session. Count it once (under the owner) and keep the evidence.
+                cur = self.conn.execute(
+                    "INSERT OR IGNORE INTO agent_usage_duplicates (usage_id, session_id, owner_session_id, seen_at)"
+                    " VALUES (?,?,?,?)", (ev.usage_id, sid, owner["session_id"], now_iso()))
+                if cur.rowcount > 0:
+                    stats.duplicate_usage += 1
+                    self.conn.execute(
+                        "UPDATE agent_sessions SET usage_duplicates = usage_duplicates + 1,"
+                        " duplicate_of_session_id = COALESCE(duplicate_of_session_id, ?) WHERE session_id = ?",
+                        (owner["session_id"], sid))
+            return False
         amount: int | None = None
         status = "no_usage" if not ev.has_usage else "unpriced"
         card_id: str | None = None
         resolution: str | None = None
         if ev.has_usage:
             at = _parse_ts(ev.at)
-            card, resolution = self.cards.resolve(provider=claude_code.PROVIDER, source="list", at=at,
+            card, resolution = self.cards.resolve(provider=ev.provider, source="list", at=at,
                                                   fallback="nearest_earlier", pin=None)
             if card is not None:
                 card_id = card.rate_card_id
@@ -347,11 +380,12 @@ class Ingestor:
             "INSERT OR IGNORE INTO agent_usage (usage_id, session_id, turn_id, request_id, model, at, input_tokens,"
             " cache_write_5m_tokens, cache_write_1h_tokens, cache_read_tokens, output_tokens, web_search_requests,"
             " web_fetch_requests, usage_kind, provenance, source_cost_nanos, api_equiv_nanos, api_equiv_status,"
-            " rate_card_id, rate_resolution, calc_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " rate_card_id, rate_resolution, calc_version, provider, reasoning_tokens, ordinal)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (ev.usage_id, sid, parser.current_turn, ev.request_id, ev.model, ev.at, ev.input_tokens,
              ev.cache_write_5m_tokens, ev.cache_write_1h_tokens, ev.cache_read_tokens, ev.output_tokens,
              ev.web_search_requests, ev.web_fetch_requests, ev.usage_kind, ev.provenance, ev.source_cost_nanos,
-             amount, status, card_id, resolution, CALC_VERSION),
+             amount, status, card_id, resolution, CALC_VERSION, ev.provider, ev.reasoning_tokens, ev.ordinal),
         )
         if cur.rowcount > 0:
             stats.usage += 1

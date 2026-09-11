@@ -14,7 +14,8 @@ Delete the file to delete everything.
 | Source | Stored | Never stored |
 |---|---|---|
 | `runpeek run` (OpenAI SDK harness) | run id, a redacted command description, timestamps, latency, model names, token counts, provider request ids, HTTP status, error class, customer/job labels you set, cost estimates and their provenance | prompts, messages, completions, request or response bodies, API keys, headers |
-| `runpeek watch` (Claude Code transcripts) | session/turn/tool-call ids, timestamps, tool names, an allowlisted target (path relative to the project, program name, or URL host), error flag, token counts, model names, a keyed fingerprint of normalised tool arguments | prompts, assistant text, tool inputs and outputs, commands, file contents, URLs beyond the host |
+| `runpeek watch` (Claude Code transcripts, Codex rollouts) | session/turn/tool-call ids, timestamps, tool names, an allowlisted target (path relative to the project, program name, or URL host), error flag, token counts, model names, provider response ids, git branch name, a keyed fingerprint of normalised tool arguments | prompts, assistant text, reasoning, tool inputs and outputs, commands, patches, file contents, URLs beyond the host, commit hashes, instructions |
+| `runpeek work` | the names, kinds, references (issue, branch, PR, deployment) and notes you type, assignment history | — |
 
 Findings, exports and error messages are built only from stored fields.
 

@@ -1,4 +1,4 @@
-"""runpeek — run · summary · events · export · reprice."""
+"""runpeek — work · watch · sessions · session · findings · run · summary · events · export · reprice."""
 
 from __future__ import annotations
 
@@ -276,8 +276,9 @@ EXPORT_TABLES = ("runs", "spans", "operations", "attempts", "identifiers", "sour
                  "correlations", "charges", "perspectives", "cost_estimates", "health_events",
                  # coding-agent observer (no run_id; always exported whole). `meta` is never exported:
                  # it holds the fingerprint key.
-                 "agent_sessions", "agent_turns", "agent_actions", "agent_usage", "agent_findings",
-                 "watch_checkpoints")
+                 "agent_sessions", "agent_turns", "agent_actions", "agent_usage", "agent_usage_duplicates",
+                 "agent_findings", "watch_checkpoints",
+                 "work_items", "work_item_sessions", "work_item_events")
 
 
 def cmd_export(args: argparse.Namespace) -> int:
@@ -351,13 +352,14 @@ def _project_arg(args: argparse.Namespace) -> str | None:
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
+    from .agents.ingest import SOURCES
     from .agents.watch import Watcher
 
-    if args.source != "claude-code":
-        sys.exit(f"runpeek watch: source {args.source!r} is not supported yet (claude-code only)")
+    sources = SOURCES if args.source == "all" else (args.source,)
     conn = _open_or_create(args)
     w = Watcher(conn, project=_project_arg(args), all_projects=args.all_projects, history=args.history,
-                interval_s=args.interval, cards=_cards(args), verbose=args.verbose, term=_term(args))
+                interval_s=args.interval, cards=_cards(args), verbose=args.verbose, term=_term(args),
+                sources=sources)
     w.install_signal_handlers()
     w.run(once=args.once)
     conn.close()
@@ -369,7 +371,7 @@ def cmd_sessions(args: argparse.Namespace) -> int:
 
     conn = _open(args)
     print(render_sessions(conn, _project_arg(args), args.last, include_empty=args.include_empty,
-                          detailed=args.detailed, term=_term(args)))
+                          detailed=args.detailed, unassigned=args.unassigned, term=_term(args)))
     return 0
 
 
@@ -402,15 +404,155 @@ def cmd_findings(args: argparse.Namespace) -> int:
     return 0
 
 
+# ----------------------------------------------------------------------------- work items
+
+
+def _resolve_work(conn: sqlite3.Connection, ref: str) -> str:
+    from .agents.work import resolve
+
+    got = resolve(conn, ref)
+    if isinstance(got, list):
+        if not got:
+            sys.exit(f"runpeek work: no work item matches {ref!r}. List them: runpeek work list")
+        sys.exit(f"runpeek work: {ref!r} matches {len(got)} work items ({', '.join(got[:6])}). Use the full id.")
+    return got
+
+
+def _resolve_sessions(conn: sqlite3.Connection, refs: list[str]) -> list[str]:
+    from .agents.report import resolve_session_id
+
+    out: list[str] = []
+    for ref in refs:
+        got = resolve_session_id(conn, ref)
+        if isinstance(got, list):
+            if not got:
+                sys.exit(f"runpeek work: no session matches {ref!r}. List them: runpeek sessions --all-projects")
+            opts = ", ".join(r.split("/")[-1][:12] for r in got[:6])
+            sys.exit(f"runpeek work: {ref!r} matches {len(got)} sessions ({opts}). Use a longer prefix.")
+        out.append(got)
+    return out
+
+
+def cmd_work_new(args: argparse.Namespace) -> int:
+    from .agents import work
+
+    conn = _open_or_create(args)
+    try:
+        wid = work.create(conn, args.name, args.kind, repository=args.repository, issue=args.issue,
+                          branch=args.branch, pr=args.pr, deployment=args.deployment, note=args.note)
+    except work.WorkItemError as exc:
+        sys.exit(f"runpeek work new: {exc}")
+    print(f"created {wid}  ·  {args.name}  ·  {args.kind}")
+    print(f"Assign sessions: runpeek work assign {wid} <session-id>…   Suggestions: runpeek work suggest {wid}")
+    return 0
+
+
+def cmd_work_list(args: argparse.Namespace) -> int:
+    from .agents.work import render_list
+
+    conn = _open(args)
+    print(render_list(conn, term=_term(args), include_closed=not args.open))
+    return 0
+
+
+def cmd_work_show(args: argparse.Namespace) -> int:
+    from .agents import work
+
+    conn = _open(args)
+    wid = _resolve_work(conn, args.work_item)
+    try:
+        r = work.build_report(conn, wid, cards=_cards(args), pin=args.pin)
+    except work.WorkItemError as exc:
+        sys.exit(f"runpeek work show: {exc}")
+    print(work.render_report(r, term=_term(args), trace=args.trace, conn=conn))
+    return 0
+
+
+def cmd_work_assign(args: argparse.Namespace) -> int:
+    from .agents import work
+
+    conn = _open(args)
+    wid = _resolve_work(conn, args.work_item)
+    sids = _resolve_sessions(conn, args.sessions)
+    try:
+        result = work.assign(conn, wid, sids)
+    except work.WorkItemError as exc:
+        sys.exit(f"runpeek work assign: {exc}")
+    for sid, prev in result:
+        short = sid.split("/")[-1][:12]
+        if prev == wid:
+            print(f"{short}: already on {wid}")
+        elif prev:
+            print(f"{short}: reassigned {prev} → {wid}")
+        else:
+            print(f"{short}: assigned to {wid}")
+    print(f"Report: runpeek work show {wid}")
+    return 0
+
+
+def cmd_work_unassign(args: argparse.Namespace) -> int:
+    from .agents import work
+
+    conn = _open(args)
+    sids = _resolve_sessions(conn, args.sessions)
+    for sid, prev in work.unassign(conn, sids):
+        short = sid.split("/")[-1][:12]
+        print(f"{short}: removed from {prev}" if prev else f"{short}: was not assigned")
+    return 0
+
+
+def cmd_work_status(args: argparse.Namespace) -> int:
+    from .agents import work
+
+    conn = _open(args)
+    wid = _resolve_work(conn, args.work_item)
+    status = args.status
+    outcome = args.outcome
+    if outcome and status is None:
+        status = "closed"
+    try:
+        work.set_status(conn, wid, status=status, outcome=outcome)
+    except work.WorkItemError as exc:
+        sys.exit(f"runpeek work status: {exc}")
+    item = work.get(conn, wid)
+    assert item is not None
+    print(f"{wid}: {work.outcome_line(dict(item))}")
+    return 0
+
+
+def cmd_work_edit(args: argparse.Namespace) -> int:
+    from .agents import work
+
+    conn = _open(args)
+    wid = _resolve_work(conn, args.work_item)
+    try:
+        work.edit(conn, wid, name=args.name, kind=args.kind, repository=args.repository, issue=args.issue,
+                  branch=args.branch, pr=args.pr, deployment=args.deployment, note=args.note)
+    except work.WorkItemError as exc:
+        sys.exit(f"runpeek work edit: {exc}")
+    print(f"{wid}: updated")
+    return 0
+
+
+def cmd_work_suggest(args: argparse.Namespace) -> int:
+    from .agents.work import render_suggestions
+
+    conn = _open(args)
+    wid = _resolve_work(conn, args.work_item)
+    print(render_suggestions(conn, wid, term=_term(args)))
+    return 0
+
+
 # ----------------------------------------------------------------------------- parser
 
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="runpeek",
-        description="RunPeek by NemulAI — see where your AI spends time and tokens. Observes supported AI"
-                    " applications and Claude Code sessions locally, attributes estimated model costs, and"
-                    " highlights repeated failures and repeated work.",
+        description="RunPeek by NemulAI — see where your coding agents spend money. Groups Claude Code and"
+                    " Codex sessions into work items (a task, feature, bug fix or deployment), estimates their"
+                    " model cost locally with dated list prices, shows what drove it and how complete the"
+                    " accounting is. Also observes the OpenAI Python SDK in your own applications.",
     )
     ap.add_argument("--version", action="version", version=f"runpeek {__version__}")
     ap.add_argument("--no-color", action="store_true", help="plain output (also honoured: NO_COLOR, non-TTY)")
@@ -421,6 +563,72 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--rate-card", action="append", metavar="FILE", help="extra rate card JSON (repeatable)")
         if perspective:
             sp.add_argument("--perspective", default="default")
+
+    wk = sub.add_parser("work", help="work items: group agent sessions into a task, feature, bug fix or deployment")
+    wsub = wk.add_subparsers(dest="work_command", required=True)
+
+    wn = wsub.add_parser("new", help="create a work item")
+    common(wn, perspective=False)
+    wn.add_argument("name")
+    wn.add_argument("--kind", choices=["task", "feature", "bugfix", "deployment"], default="task")
+    wn.add_argument("--repository", help="project path or repository url (used only to suggest sessions)")
+    wn.add_argument("--issue")
+    wn.add_argument("--branch")
+    wn.add_argument("--pr")
+    wn.add_argument("--deployment")
+    wn.add_argument("--note")
+    wn.set_defaults(fn=cmd_work_new)
+
+    wl = wsub.add_parser("list", help="list work items with their estimated model cost")
+    common(wl, perspective=False)
+    wl.add_argument("--open", action="store_true", help="open items only")
+    wl.set_defaults(fn=cmd_work_list)
+
+    wsh = wsub.add_parser("show", help="cost report for one work item")
+    common(wsh, perspective=False)
+    wsh.add_argument("work_item")
+    wsh.add_argument("--trace", type=int, nargs="?", const=50, default=0, metavar="N",
+                     help="also list the last N source usage records with ids and pricing")
+    wsh.add_argument("--pin", metavar="RATE_CARD_ID",
+                     help="price every call under one rate card for this view only (stored estimates untouched)")
+    wsh.set_defaults(fn=cmd_work_show)
+
+    wa = wsub.add_parser("assign", help="attach sessions to a work item (reassigns if already elsewhere)")
+    common(wa, perspective=False)
+    wa.add_argument("work_item")
+    wa.add_argument("sessions", nargs="+", metavar="SESSION")
+    wa.set_defaults(fn=cmd_work_assign)
+
+    wu = wsub.add_parser("unassign", help="detach sessions from whatever work item they are on")
+    common(wu, perspective=False)
+    wu.add_argument("sessions", nargs="+", metavar="SESSION")
+    wu.set_defaults(fn=cmd_work_unassign)
+
+    wst = wsub.add_parser("status", help="set status and outcome")
+    common(wst, perspective=False)
+    wst.add_argument("work_item")
+    wst.add_argument("--status", choices=["open", "closed"])
+    wst.add_argument("--outcome", choices=["completed", "incomplete", "failed", "abandoned"],
+                     help="closes the item unless --status open is given")
+    wst.set_defaults(fn=cmd_work_status)
+
+    we = wsub.add_parser("edit", help="change name, kind or references")
+    common(we, perspective=False)
+    we.add_argument("work_item")
+    we.add_argument("--name")
+    we.add_argument("--kind", choices=["task", "feature", "bugfix", "deployment"])
+    we.add_argument("--repository")
+    we.add_argument("--issue")
+    we.add_argument("--branch")
+    we.add_argument("--pr")
+    we.add_argument("--deployment")
+    we.add_argument("--note")
+    we.set_defaults(fn=cmd_work_edit)
+
+    wsu = wsub.add_parser("suggest", help="unassigned sessions that match the item's repository or branch")
+    common(wsu, perspective=False)
+    wsu.add_argument("work_item")
+    wsu.set_defaults(fn=cmd_work_suggest)
 
     r = sub.add_parser("run", help="run a command with the harness attached, then print its summary")
     common(r, perspective=False)
@@ -458,9 +666,10 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--all-runs", action="store_true")
     rp.set_defaults(fn=cmd_reprice)
 
-    w = sub.add_parser("watch", help="observe coding-agent sessions in the background (foreground process)")
+    w = sub.add_parser("watch", help="observe Claude Code and Codex sessions (foreground process)")
     common(w, perspective=False)
-    w.add_argument("--source", default="claude-code", choices=["claude-code"])
+    w.add_argument("--source", default="all", choices=["all", "claude-code", "codex"],
+                   help="which agent's session records to read (default: all supported)")
     w.add_argument("--project", help="project directory to watch (default: current directory)")
     w.add_argument("--all-projects", action="store_true", help="watch every project the agent has sessions for")
     w.add_argument("--history", default="7d",
@@ -477,6 +686,7 @@ def build_parser() -> argparse.ArgumentParser:
     ss.add_argument("--last", type=int, default=20)
     ss.add_argument("--include-empty", action="store_true", help="also list transcripts with no activity")
     ss.add_argument("--detailed", action="store_true", help="token and estimated-cost columns")
+    ss.add_argument("--unassigned", action="store_true", help="only sessions not on any work item")
     ss.set_defaults(fn=cmd_sessions)
 
     so = sub.add_parser("session", help="one session: usage, turns, actions, findings")

@@ -1,5 +1,19 @@
 """Normalised events every source adapter emits. No content fields exist here
-by construction: an adapter that wants to persist a prompt has nowhere to put it."""
+by construction: an adapter that wants to persist a prompt has nowhere to put it.
+
+Token categories are normalised across providers so one pricing formula
+applies everywhere:
+
+  input_tokens        uncached input (Anthropic reports it this way; OpenAI's
+                      ``input_tokens`` includes cached tokens, so the Codex
+                      adapter subtracts ``cached_input_tokens``)
+  cache_read_tokens   input served from a prompt cache
+  cache_write_*       Anthropic cache writes (priced separately); OpenAI reports
+                      ``cache_write_input_tokens`` (always 0 in inspected data)
+                      and does not price writes separately
+  output_tokens       all output, *including* reasoning
+  reasoning_tokens    the reasoning part of output (informational; OpenAI only)
+"""
 
 from __future__ import annotations
 
@@ -14,6 +28,7 @@ class TranscriptFile:
     session_id: str
     project_path: str | None
     parent_session_id: str | None = None
+    source: str = "claude-code"
 
     @property
     def is_subagent(self) -> bool:
@@ -26,6 +41,8 @@ class SessionInfo:
     source_version: str | None
     project_path: str | None
     at: str | None
+    git_branch: str | None = None
+    repository_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +55,7 @@ class TurnStartEvent:
 class TurnDurationEvent:
     duration_ms: int | None
     at: str | None
+    turn_id: str | None = None  # when the source names the turn; else the parser's current turn
 
 
 @dataclass(frozen=True)
@@ -61,7 +79,7 @@ class ToolResultEvent:
 
 @dataclass(frozen=True)
 class UsageEvent:
-    usage_id: str  # source's message id
+    usage_id: str  # source's message / response id, or a (session, ordinal) key
     request_id: str | None
     model: str | None
     at: str | None
@@ -75,6 +93,9 @@ class UsageEvent:
     usage_kind: str = "per_request"  # per_request | cumulative_snapshot
     provenance: str = "provider_reported"
     source_cost_nanos: int | None = None
+    provider: str = "anthropic"
+    reasoning_tokens: int | None = None
+    ordinal: int | None = None  # position in the source file, for tracing back to the record
 
     @property
     def has_usage(self) -> bool:

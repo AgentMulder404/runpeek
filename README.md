@@ -1,346 +1,273 @@
+<div align="center">
+
 # RunPeek
-### by NemulAI
 
-See where your AI spends time and tokens.
+**by NemulAI**
 
-Watch supported AI workloads locally, understand estimated costs,
-and spot repeated failures and repeated work worth reviewing.
+*See where your coding agents spend money, and what a piece of work actually took.*
 
-RunPeek watches two things: the OpenAI Python SDK calls your own application
-makes (`runpeek run`), and the Claude Code sessions in a project
-(`runpeek watch`). It helps you answer *which customer or job caused these
-model calls*, *what did they consume*, *what would that cost at list prices*,
-and *where did the agent repeat itself*. Collection and analysis run entirely
-on your machine — no account, no service, no uploads, no runtime dependencies.
+[![PyPI](https://img.shields.io/pypi/v/runpeek?label=pypi&color=blue)](https://pypi.org/project/runpeek/)
+[![CI](https://github.com/AgentMulder404/runpeek/actions/workflows/ci.yml/badge.svg)](https://github.com/AgentMulder404/runpeek/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
+[![Runtime deps](https://img.shields.io/badge/runtime%20deps-0-brightgreen)](pyproject.toml)
 
-**Sample output** (rendered from a test fixture, not a real session):
+</div>
+
+RunPeek reads the session records your coding agents already write, groups
+them into **work items** (a task, a feature, a bug fix, a deployment), and
+tells you what each one cost in model usage: which sessions, agents and
+models drove it, whether the work finished, and how much of the accounting
+it can actually vouch for.
+
+No account. No service. No uploads. No runtime dependencies. One SQLite file
+per project.
 
 ```
-05:03  REPEATED READ
-       package.json was read 4 times in 2 minutes.
-       No edit to that file was observed between reads.
-       Repeated billing cannot be determined.
-
-       Evidence: runpeek session 719c4032
-
-05:04  REPEATED FAILURE
-       A python3 command failed 4 times consecutively over 46 seconds.
-       No edit or write was observed between the failures.
-       Check the error before repeating the command.
-
-       Evidence: runpeek session 719c4032
-
-05:04  TURN FINISHED
-       51 seconds · 8 tool calls (4 failed) · 8 model calls
-       API-equivalent estimate: $0.115
-       2 potential inefficiencies to review · runpeek session 719c4032
-```
-
-## Install
-
-RunPeek is a pre-release on PyPI (`0.1.0a1`), so `pip` needs `--pre`:
-
-```bash
 pip install --pre runpeek
 ```
 
-Or from source, which is also what you need for the offline demo and tests:
+---
 
-```bash
-git clone https://github.com/AgentMulder404/runpeek.git && cd runpeek
-python -m venv .venv && . .venv/bin/activate
-pip install -e .            # runtime: no dependencies
-pip install -e ".[dev]"     # adds the openai SDK, httpx, pytest, ruff, mypy — needed for the offline demo and tests
+## The questions it answers
+
+```mermaid
+flowchart LR
+    subgraph agents["Your coding agents"]
+        CC["Claude Code<br/>~/.claude/projects/…/*.jsonl"]
+        CX["Codex<br/>~/.codex/sessions/…/rollout-*.jsonl"]
+    end
+    CC -. "runpeek watch<br/>read-only" .-> DB[("./.runpeek/runpeek.db")]
+    CX -. "runpeek watch<br/>read-only" .-> DB
+    DB --> WI["work item<br/>sessions · subagents · retries"]
+    WI --> Q1["What has this cost so far?"]
+    WI --> Q2["Which sessions, agents, models drove it?"]
+    WI --> Q3["Did it finish?"]
+    WI --> Q4["How complete is the accounting?"]
+    style DB fill:#1f2937,stroke:#60a5fa,color:#fff
 ```
 
-Python 3.10+.
+| Question | Where the answer comes from |
+|---|---|
+| **What has this work cost so far?** | Every model call in the assigned sessions, priced with a dated list-price rate card. Shown as an *API-equivalent estimate of model usage*, never as a bill. |
+| **Which sessions, agents and models drove that cost?** | Breakdowns by agent (Claude Code, Codex), by model, by session, with subagents shown under their parent, plus a spending timeline. |
+| **Did the work finish?** | The work item's outcome: completed, incomplete, failed or abandoned. |
+| **How complete and trustworthy is the accounting?** | Priced subtotal versus total calls, unpriced models, missing usage, unsupported record versions, replayed usage from resumed sessions, and the rate card and calculation version behind every number. |
 
-## Set up in five minutes
+---
+
+## Five-minute setup
 
 ```bash
-# 1. install (a pre-release, so --pre)
-python -m venv ~/.venvs/runpeek && . ~/.venvs/runpeek/bin/activate
-pip install --pre runpeek
-runpeek --version                                  # runpeek 0.1.0a1
-
-# 2. watch Claude Code in a project (leave this terminal open)
+pip install --pre runpeek                 # pre-release, so --pre
 cd /path/to/project
-runpeek watch                                      # loads the last 7 days, then shows live events
 
-# 3. observe your own Python app (separate terminal, same venv)
-runpeek run python app.py                          # prints a cost/usage summary when the app exits
+runpeek watch --once                      # 1. collect Claude Code and Codex sessions for this project
+runpeek sessions --unassigned             # 2. see what was collected
 
-# 4. review
-runpeek sessions                                   # Claude Code sessions in this project
-runpeek findings                                   # potential inefficiencies
-runpeek summary                                    # latest runpeek run of your app
+runpeek work new "Add export endpoint" --kind feature --repository "$PWD" --issue "#42"
+runpeek work suggest wi-3f9a1c            # 3. sessions that match the repository or branch (nothing is assigned)
+runpeek work assign wi-3f9a1c a1b2c3d4 01a078a0
+runpeek work status wi-3f9a1c --outcome completed
+
+runpeek work show wi-3f9a1c               # 4. the report
+runpeek work show wi-3f9a1c --trace       #    … with the source usage records behind it
 ```
 
-Everything is written to `./.runpeek/runpeek.db` in the project directory —
-one store per project, nothing leaves the machine. Add `--project /path` or
-`--db /path/to/store.db` to point commands elsewhere.
+Leave `runpeek watch` running (without `--once`) while you work and it keeps
+collecting. Everything goes to `./.runpeek/runpeek.db`; point commands
+elsewhere with `--db`.
 
-## Quickstart A — watch Claude Code
+---
 
-```bash
-runpeek watch --project /path/to/project
+## A work-item report
+
+Real output from the maintainer's machine (one feature worked on across a
+Codex thread with two subagents and two Claude Code sessions with one
+subagent; session ids shortened):
+
+```
+WORK ITEM wi-e312f4  ·  Multi-agent research pipeline  ·  feature
+repository /Users/…/NemulAI · branch main
+Outcome: completed (closed Today 22:09)
+Created Today 22:09 · activity Sep 04 16:03 → Today 22:09
+
+ESTIMATED MODEL COST
+  $29.3278055  estimated model cost (API-equivalent, list prices)
+  127 of 239 model calls priced · total is a priced subtotal, not the whole (112 unpriced, 0 without usage)
+  tokens: input 1,165,089 · cache read 26,094,895 · cache write 852,609 · output 241,353 (reasoning 5,719)
+  Model usage only, as reported in agent session records: not infrastructure, CI, hosting or
+  provider billing. Not a subscription charge. Estimates use dated list-price rate cards.
+
+BY AGENT
+  Agent          Sessions   Calls     Est. cost   Share  Unpriced
+  Claude Code           3     127   $29.3278055  100.0%
+  Codex                 3     112           —+?    0.0%  112
+
+BY MODEL
+  Model                             Agent         Calls    Input  Cache r   Output     Est. cost
+  claude-fable-5-1                  Claude Code     106     2.9k    13.5M   188.5k    $28.403603
+  claude-opus-5                     Claude Code      21       42   921.4k       60    $0.9242025
+  gpt-6-astra                       Codex           112     1.2M    11.7M    52.8k           —+?
+
+BY SESSION  (3 assigned, 3 subagents included via parent)
+  Started           Session       Agent         Calls  Tools Failed     Est. cost   Share  Notes
+  Yesterday 22:46   fb1861c8      Claude Code      59     82      0  $15.81071575   53.9%
+  Yesterday 22:25   cb03baab      Claude Code      47     78      1  $12.59288725   42.9%
+  Yesterday 22:44   agent-a888b0  Claude Code      21     39      0    $0.9242025    3.2%  subagent of cb03baab
+  Sep 04 16:03      01a06ea7      Codex            96     87      0           —+?       —
+  Sep 06 14:30      01a078a0      Codex             7      6      0           —+?       —  subagent of 01a06ea7
+  Sep 06 14:30      01a078a1      Codex             9      8      0           —+?       —  subagent of 01a06ea7
+
+TIMELINE  (by day, local time)
+  2026-09-04            14 calls            —+?
+  2026-09-06            55 calls            —+?
+  2026-09-09            68 calls    $9.52287925  ████████████
+  2026-09-10            59 calls   $19.80492625  ████████████████████████
+
+ACCOUNTING COVERAGE
+  Sessions: 6 counted · 3 assigned explicitly · 3 subagents via parent
+  Model calls: 127 priced · 112 unpriced · 0 without usage → coverage partial
+    112 × model gpt-6-astra not in openai-list@2025-08-01
+  4 repeated usage snapshots ignored (cumulative total unchanged; Codex).
+  Not measured: sessions written by other tools or outside the watched locations; work done
+  without an agent; infrastructure or billing.
+
+PRICING PROVENANCE
+  127 calls priced with anthropic-list@2026-09-09 (effective at execution)
+  Calculation version 1. Source-reported cost: not available in agent records.
+  Every estimate row carries its usage id, request id (when the source has one), rate card and
+  calculation version: runpeek work show --trace / runpeek export.
 ```
 
-Keep using Claude Code normally in that project. The watcher first loads
-recent history (transcripts modified in the last 7 days; `--history all` or
-`--history none`) and summarises any historical findings without replaying
-them as live events. Then it prints only meaningful events: new sessions,
-turns starting and finishing, potential inefficiencies, and collection
-problems. Ctrl-C stops the watcher; your Claude session keeps running.
+The 112 unpriced Codex calls are honest, not a bug: they ran on `gpt-6-astra`
+before the date that model's price was verified, and RunPeek does not
+backdate prices. `runpeek work show wi-e312f4 --pin openai-list@2026-09-10`
+prices them under today's card for that view only and says so in the header.
 
-Review afterwards:
+---
 
-```bash
-runpeek sessions --project /path/to/project     # started, tool calls, errors, model calls, items to review
-runpeek findings --project /path/to/project     # potential inefficiencies, newest first
-runpeek session <session-id>                     # one session: activity, items with evidence, usage and estimate
-```
+## What the accounting guarantees
 
-`--project` defaults to the current directory; `--all-projects` covers every
-project Claude Code has transcripts for. If the filter finds nothing, RunPeek
-says so and names the projects it has collected.
+| Rule | What it means in the output |
+|---|---|
+| **Unknown stays unknown** | A call with no usage, an unknown model, or a record the adapter cannot read is counted and shown as unpriced. Never `$0`. The headline is a *priced subtotal* whenever anything is missing. |
+| **Nothing is counted twice** | A session belongs to at most one work item. Subagents follow their parent unless assigned elsewhere. Re-importing the same records changes nothing. A resumed or forked transcript that replays old usage is counted once and the replay is reported. |
+| **Estimate, not bill** | Every figure is labelled "estimated model cost (API-equivalent, list prices)". Subscription usage is never shown as a per-call charge. Infrastructure, CI and hosting are outside scope and the report says so. |
+| **Prices are verified and dated** | Rate cards record their source URL and retrieval date. A model is priced only from the date its price was verified; earlier usage stays unpriced under the card effective then. |
+| **Every number is traceable** | Each usage row keeps its source ids (message id, response id, ordinal), the rate card and resolution used, and the calculation version. `--trace` and `runpeek export` expose them. |
+| **Assignment is explicit** | Repository, branch and issue only *suggest* sessions. Nothing joins a work item without a command. |
 
-The Claude Code transcript adapter is **experimental**: it reads
-`~/.claude/projects/<project>/*.jsonl` (and `…/<session>/subagents/*.jsonl`),
-whose format is undocumented. It was built against transcripts written by
-Claude Code 2.1.x (CLI 2.1.258 verified) and marks other writer versions as
-`unknown_version`, parsed best-effort.
+---
 
-## Quickstart B — observe a Python AI application
+## Supported agents
 
-```bash
-export OPENAI_API_KEY=…        # your application's own credentials; RunPeek never reads or stores them
-runpeek run python app.py
-```
+| Agent | Records read | Status | What was verified |
+|---|---|---|---|
+| **Claude Code** 2.1.x | `~/.claude/projects/<project>/*.jsonl` and `…/<session>/subagents/*.jsonl` | 🧪 Supported, experimental (undocumented format, version-gated) | Per-request usage keyed by message id; subagent files share no usage with their parent (0 overlaps in 11,090 ids); forked sessions replay old ids (268 found), counted once |
+| **Codex** CLI 0.130–0.153 | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | 🧪 Supported, experimental (undocumented format, version-gated) | Usage taken as the difference of consecutive cumulative totals; summing `last_token_usage` over-counts (112 stale repeats in 3,847 events); subagent counters restart at zero; identity from the file's thread id |
+| Cursor, Gemini CLI, Aider, others | — | ❌ Not supported | see roadmap |
 
-Optionally attribute calls from inside your code:
+Both adapters read the agents' own files, read-only, and store only ids,
+timestamps, tool names, allowlisted targets, token counts and model names.
+Details and evidence: [`docs/AGENT_SOURCES.md`](docs/AGENT_SOURCES.md).
+
+Rate cards shipped: `anthropic-list@2026-09-09`, `openai-list@2026-09-10`
+(and the earlier OpenAI cards they supersede). Verification log in
+[`docs/PRICING.md`](docs/PRICING.md). Add your own with `--rate-card FILE`.
+
+---
+
+## Command reference
+
+| Command | What it does |
+|---|---|
+| `runpeek watch [--once] [--source all\|claude-code\|codex]` | Collect sessions for the project (or `--all-projects`); live feed of turns and potential inefficiencies |
+| `runpeek work new NAME --kind task\|feature\|bugfix\|deployment` | Create a work item (`--repository`, `--issue`, `--branch`, `--pr`, `--deployment`, `--note`) |
+| `runpeek work list [--open]` | Work items with sessions, calls and estimated cost |
+| `runpeek work show ID [--trace N] [--pin CARD]` | The cost report |
+| `runpeek work assign ID SESSION…` / `unassign SESSION…` | Explicit assignment; reassignment is recorded |
+| `runpeek work status ID --outcome completed\|incomplete\|failed\|abandoned` | Close with an outcome (`--status open` reopens) |
+| `runpeek work suggest ID` | Unassigned sessions matching the item's repository or branch. Assigns nothing |
+| `runpeek work edit ID …` | Change name, kind or references |
+| `runpeek sessions [--unassigned] [--detailed]` | Collected sessions with agent and work item |
+| `runpeek session ID` | One session: turns, tools, usage, estimate, work item, findings |
+| `runpeek findings` | Repeated failures, repeated reads and tight loops, with evidence |
+| `runpeek export --out FILE` | Every stored table as JSONL |
+
+Session and work-item ids accept unique prefixes.
+
+---
+
+## Also: observe your own Python application
+
+`runpeek run python app.py` wraps the OpenAI Python SDK's
+`chat.completions.create` (synchronous, non-streaming) in your own code,
+attributes calls to customers and jobs with `runpeek.job(...)`, and prints a
+summary. It is a separate accounting domain from agent sessions and is never
+mixed into a work item.
 
 ```python
 import runpeek
 
 with runpeek.job(customer="acme", job="support_ticket"):
-    client.chat.completions.create(...)     # observed and attributed
+    client.chat.completions.create(...)
 ```
 
-Nested `job()` inherits `customer`; calls outside any `job()` are recorded as
-"No customer tag" — a real row with a real estimate, not a missing one.
-Context follows `await` and `asyncio.create_task`; for threads use
-`runpeek.wrap(fn)`, across processes `runpeek.inject()` / `runpeek.extract()`.
+`runpeek summary`, `events`, `export` and `reprice --pin CARD` work on those
+runs. Streaming calls are observed but not measured; `AsyncOpenAI` and the
+Responses API are not patched. Offline demo: `runpeek run python examples/basic.py`.
 
-When the application exits, RunPeek prints a summary. Later:
-
-```bash
-runpeek summary                     # latest run (add --verbose for the full accounting ledger)
-runpeek events --last 20            # per-call detail
-runpeek export --format jsonl --out run.jsonl
-runpeek reprice --pin openai-list@2026-09-09   # price under a separate pinned perspective
-```
-
-**Supported SDK surface:** `openai` Python SDK, `client.chat.completions.create`,
-synchronous, non-streaming — tested against `openai==2.44.0`. Streaming calls
-are recorded as observed-but-unmeasured (`stream=True`, no usage); `AsyncOpenAI`,
-the Responses API and other providers are not patched. `runpeek run` works for
-commands that start a CPython interpreter which processes `site` and inherits
-the environment (`python script.py` is tested; `-S`/`-I` and embedded
-interpreters are not covered). If you cannot use `runpeek run`, call
-`runpeek.install()` before importing the provider client.
-
-### Offline demo (no provider account)
-
-```bash
-runpeek run python examples/basic.py
-```
-
-`examples/basic.py` drives the real `openai` client through a local mock
-transport: three customers, an unknown model, a rate-limit error and a
-timeout. It needs the `[dev]` extras; the RunPeek runtime itself has no
-dependencies.
-
-**Sample output** (from that demo):
-
-```
-RUNPEEK / RUN COMPLETE
-
-python examples/basic.py
-Application exited successfully · telemetry saved
-
-8 model calls observed
-  6 completed · 2 failed
-
-$0.016052  known estimated API cost
-           5 of 8 calls priced — total is incomplete
-
-CUSTOMER           ESTIMATED COST    UNPRICED / UNKNOWN
-acme                     $0.01486                     0
-globex                   $0.00084                     1
-No customer tag         $0.000352                     0
-initech                         —                     2
-
-Missing from this estimate:
-• 1 call used a model with no known price (acme-preview-1)
-• 2 failed calls returned no usage
-
-Estimate at list prices — not verified provider billing.
-
-Stored locally · nothing uploaded
-Details: runpeek events · Full accounting: runpeek summary --verbose
-```
-
-## What RunPeek helps you find
-
-- Which customer or job the model calls belonged to, and what they consumed.
-- Calls that could not be priced (unknown model) or measured (errors,
-  streaming, missing usage) — shown beside the estimate, never folded into it.
-- In Claude Code sessions: the same command failing again and again with no
-  edit between attempts; the same file read repeatedly without an observed
-  edit; a tool erroring across many different inputs; one action looping
-  tightly. Each is a *potential* inefficiency — repetition is worth reviewing,
-  not proof of waste — with its evidence, a next step, and the limitation
-  needed to read it correctly.
-
-## How it works
-
-RunPeek is not a model, an agent framework, or a gateway. It does not run
-your prompts and needs no LLM or cloud account of its own. Its diagnostics
-are deterministic local analysis of what a supported source already records:
-the SDK's usage block, or the transcript Claude Code writes.
-
-```
- Python app ──► openai SDK ──► provider        Claude Code ──► ~/.claude/projects/<proj>/*.jsonl
-      │  runpeek run: one patched method,                          │  runpeek watch: read-only polling,
-      │  exactly-once call, fail-open hooks                        │  checkpoints, no duplicates
-      ▼                                                            ▼
- operations · attempts · observations           sessions · turns · tool calls · usage
-      └────────────► SQLite ./.runpeek/runpeek.db ◄────────────────┘
-                       accounting: charges → dated rate cards → estimates
-                       diagnostics: repeated failure · repeated read · retry loop
-          runpeek summary · events · export     runpeek sessions · session · findings
-```
-
-More in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and the full design in
-[`docs/DESIGN.md`](docs/DESIGN.md).
-
-## Supported integrations
-
-| Integration | Status | Notes |
-|---|---|---|
-| OpenAI Python SDK — `chat.completions.create`, sync, non-streaming | **Supported, tested** | `openai==2.44.0`; exactly-once, fail-open |
-| OpenAI — streaming | Observed, not measured | recorded as `unsupported_stream`, no usage, no cost |
-| OpenAI — `AsyncOpenAI`, Responses API | Not supported | not patched; invisible |
-| Claude Code transcripts (2.1.x) | **Supported, experimental** | undocumented format; version-gated adapter |
-| Claude Code source-reported cost | Not available | only in Claude Code's OpenTelemetry export, which RunPeek does not consume |
-| Codex | Not supported | capability check and adapter path in [`docs/AGENT_SOURCES.md`](docs/AGENT_SOURCES.md) |
-| Other providers, raw HTTP, other languages | Not supported | |
-| Dashboards, outcome tracking, run comparison, GPU accounting | Not built | see roadmap |
-
-## What the numbers mean
-
-- **Tokens** are reported by the source — the SDK's usage block, or the usage
-  Claude Code writes into its transcripts — not independently audited.
-- **Estimated cost** is a calculation from those tokens and a dated list-price
-  table ([`docs/PRICING.md`](docs/PRICING.md)). It is *not* your subscription
-  charge, quota usage, a reconciled bill, or a saving. For Claude Code it is
-  labelled "API-equivalent estimate" every time it appears.
-- **Unknown stays unknown.** A call with no usage, an unknown model, an error
-  or a timeout is counted and shown as unpriced or unknown, never as `$0`.
-- **Capture coverage** — how much AI activity RunPeek did not see — is not
-  measurable without an independent source. A run with no observations says
-  "this does not mean none happened".
-- **Findings are potential inefficiencies.** A repeated read shows a file was
-  requested again; whether its contents were billed again is not observable.
-  Only Edit/Write tool calls count as an observed change; command side effects
-  and edits outside the agent are invisible.
-- **Historical vs live.** The watcher summarises history at startup and marks
-  live events with their transcript timestamps; silence is never treated as a
-  stalled agent.
-- **Supported calls only.** RunPeek watches the surfaces listed above, not
-  every AI tool on your machine.
+---
 
 ## Privacy and local storage
 
-Everything lives in `./.runpeek/runpeek.db` (override: `--db`, `RUNPEEK_DB`),
-created `0600`. Stored: ids, timestamps, tool names, relative paths / program
-names / hostnames, token counts, model names, labels you set, and keyed
-fingerprints of tool arguments. Never stored: prompts, completions, tool
-inputs or outputs, commands, file contents, credentials. `runpeek export`
-writes the stored tables as JSONL with exact monetary values. Details and the
-fingerprint caveats: [`docs/PRIVACY.md`](docs/PRIVACY.md).
+| Stored | Never stored |
+|---|---|
+| ids, timestamps, tool names, exit-code-derived error flags | prompts, completions, reasoning |
+| relative paths, program names, hostnames, branch names | tool inputs and outputs, commands, patches, file contents |
+| token counts, model names, response ids | credentials, commit hashes, instructions |
+| work item names and references you type | — |
+
+One SQLite file, created `0600`. [`docs/PRIVACY.md`](docs/PRIVACY.md).
 
 ## Known limitations
 
-- One SDK surface and one agent source; see the matrix above.
-- Claude Code transcript format is undocumented; a future Claude Code release
-  may change it. Affected sessions are marked, not silently misread.
-- Turn durations come from the transcript's own end-of-turn record; subagent
-  transcripts have none, so their turns show no duration.
-- The recorded command line for `runpeek run` is redacted heuristically
-  (inline programs, secret-looking values, URLs, payloads); it is not a
-  guarantee.
-- No benchmarks are published yet; performance targets in `docs/DESIGN.md`
-  are targets.
-- The real-provider smoke test (`examples/real_openai.py`) has not been run by
-  the maintainers; it needs your own key and costs a fraction of a cent. Nothing
-  in the test suite validates actual provider billing: mocked calls exercise the
-  accounting, and rate cards are dated transcriptions of list prices.
+- Two agents. Both formats are undocumented and version-gated; other versions
+  are parsed best-effort and flagged in every report.
+- Prices are list prices verified on a date. Contract rates need your own
+  card. Usage before a model's verification date is unpriced by design.
+- Only Edit/Write and patch tool calls count as an observed change; command
+  side effects are invisible to the diagnostics.
+- Codex tool errors are known only when the output carries an exit code or
+  an MCP item failed; otherwise the flag is NULL, not "success".
+- Nothing here is infrastructure cost or provider billing.
 
-## Development and tests
+## Roadmap
+
+Not implemented, deliberately: evidence-backed explanations of repeated
+failures and expensive calls; inferred work categories (research,
+implementation, testing, debugging) with user corrections; budgets and
+alerts; forecasts from comparable completed work; more agent adapters;
+infrastructure costs and billing reconciliation.
+
+## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # offline; real openai SDK over httpx.MockTransport
+pytest                          # 125 tests, offline; sanitised real Codex records in tests/fixtures/codex
 ruff check src tests examples
 mypy                            # strict
-python -m build                 # sdist + wheel
+python -m build
 ```
-
-The test suite covers exactly-once and fail-open hooks, fractional-cent
-pricing, cached/reasoning token handling, identity and correlation, idempotent
-estimates and repricing, bounded queue and shutdown, transcript ingestion
-(partial lines, truncation, rotation, restarts, concurrent sessions),
-diagnostics true/false positives, privacy of stored rows and exports, the
-terminal policy, legacy-name migration, and every command the UI prints.
-
-## Contributing
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). Please keep tests offline and keep
-unknowns unknown. Security notes: [`SECURITY.md`](SECURITY.md).
-
-## Roadmap (short, not a promise)
-
-- Streaming usage (`stream_options.include_usage`) and async client support,
-  each behind its own tested gate.
-- Outcomes (`runpeek.outcome()`), cost per successful task, and run-to-run
-  comparison with a strict comparability check.
-- A Codex adapter once its session format or a documented interface is pinned.
-- Optional OpenTelemetry receiver for Claude Code's source-reported cost.
 
 ## Migration from the NemulAI harness
 
-Names changed; data did not. `runpeek` replaces `nemulai` for the CLI and
-import; `RUNPEEK_*` replaces `NEMULAI_*` (legacy names still honoured); an
-existing `./.nemulai/nemulai.db` is used in place with a notice. Details:
-[`docs/MIGRATION.md`](docs/MIGRATION.md).
+`runpeek` replaces `nemulai` for the CLI and import; `RUNPEEK_*` replaces
+`NEMULAI_*` (legacy names still honoured); an existing `./.nemulai/nemulai.db`
+is used in place. [`docs/MIGRATION.md`](docs/MIGRATION.md).
 
-## Running the real-provider check yourself
+## Contributing and license
 
-`examples/real_openai.py` makes two tiny non-streaming calls and one streaming
-call against a real model (about $0.0001). Provide your key to the shell only,
-never to a chat or a file in the repository:
-
-```bash
-read -rs OPENAI_API_KEY && export OPENAI_API_KEY      # typed silently
-runpeek run python examples/real_openai.py
-unset OPENAI_API_KEY
-```
-
-Expect three attempts (two priced, one `unsupported_stream`), one
-"No customer tag" row, and `x-request-id` identifiers in `runpeek export`.
-
-## License
-
-Apache License 2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+[`CONTRIBUTING.md`](CONTRIBUTING.md) · [`SECURITY.md`](SECURITY.md) ·
+Apache License 2.0, see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

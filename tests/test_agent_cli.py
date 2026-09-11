@@ -29,14 +29,14 @@ def test_watch_once_sessions_session_findings_export(tmp_path: Path) -> None:
 
     r = _run(["watch", "--db", str(db), "--project", PROJECT, "--history", "all", "--once"], cwd=tmp_path, home=home)
     assert r.returncode == 0, r.stderr
-    assert "RUNPEEK / LIVE WATCH" in r.stdout and "Watching Claude Code in cli-project" in r.stdout
+    assert "RUNPEEK / LIVE WATCH" in r.stdout and "Watching Claude Code and Codex in cli-project" in r.stdout
     assert "Local collection · no uploads" in r.stdout and "Ready · 1 session loaded" in r.stdout
     assert "Historical: 1 potential inefficiencies in 1 session" in r.stdout
     assert "Done. Loaded 3 tool calls" in r.stdout and f"Review: runpeek sessions --project {PROJECT}" in r.stdout
     assert "entries" not in r.stdout  # parser vocabulary never reaches the default screen
 
     s = _run(["sessions", "--db", str(db), "--project", PROJECT], cwd=tmp_path, home=home)
-    assert s.returncode == 0 and "RECENT CLAUDE CODE SESSIONS" in s.stdout and t.session_id[:8] in s.stdout
+    assert s.returncode == 0 and "RECENT CODING-AGENT SESSIONS" in s.stdout and t.session_id[:8] in s.stdout
     assert f"runpeek session {t.session_id[:8]}" in s.stdout and "Tool calls" in s.stdout
     sd = _run(["sessions", "--db", str(db), "--project", PROJECT, "--detailed"], cwd=tmp_path, home=home)
     assert "API-equivalent estimate" in sd.stdout and "Est. cost" in sd.stdout
@@ -77,5 +77,9 @@ def test_watch_reports_missing_project_dir_and_unsupported_source(tmp_path: Path
     (home / "projects").mkdir(parents=True)
     r = _run(["watch", "--db", str(tmp_path / "n.db"), "--project", "/nowhere", "--once"], cwd=tmp_path, home=home)
     assert r.returncode == 0 and "Ready · 0 sessions loaded" in r.stdout
-    r2 = _run(["watch", "--db", str(tmp_path / "n.db"), "--source", "codex", "--once"], cwd=tmp_path, home=home)
+    r2 = _run(["watch", "--db", str(tmp_path / "n.db"), "--source", "cursor", "--once"], cwd=tmp_path, home=home)
     assert r2.returncode != 0 and "invalid choice" in r2.stderr
+    # codex is a valid source; with no ~/.codex it simply finds nothing
+    r3 = _run(["watch", "--db", str(tmp_path / "n.db"), "--source", "codex", "--project", "/nowhere", "--once"],
+              cwd=tmp_path, home=home)
+    assert r3.returncode == 0 and "Watching Codex in nowhere" in r3.stdout

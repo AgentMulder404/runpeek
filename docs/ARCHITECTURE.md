@@ -17,9 +17,17 @@
  └─────────────────────────────────────────────────────────────────────┘
 ```
 
-Two sources, one store, one vocabulary. The harness measures *your* code's
-provider calls; the watcher reads *Claude Code's* own transcripts. They are
+Two kinds of source, one store, one vocabulary. The harness measures *your*
+code's provider calls; the watcher reads the coding agents' own session
+records (Claude Code transcripts, Codex rollouts). Harness and agent usage are
 never summed into one total.
+
+**Work items** sit on top of agent sessions: `work_items` ←
+`work_item_sessions` (primary key `session_id`, so a session is on at most
+one item) ← subagents follow their parent unless assigned elsewhere. A report
+is a pass over the `agent_usage` rows of those sessions; every row carries
+its rate card id, resolution and calculation version. Assignment is explicit
+(`work_item_events` is the audit trail); repository/branch only suggest.
 
 ## Packages
 
@@ -32,6 +40,8 @@ never summed into one total.
 | `runpeek.rates` / `runpeek.perspective` | dated rate cards, resolution, perspectives |
 | `runpeek.summary` | plain and ledger (`--verbose`) views of a run |
 | `runpeek.agents.claude_code` | experimental transcript adapter (writer version gated) |
+| `runpeek.agents.codex` | experimental rollout adapter (CLI version gated); usage from cumulative-total deltas |
+| `runpeek.agents.work` | work items: CRUD, explicit assignment, suggestions, cost report |
 | `runpeek.agents.ingest` | checkpointed, idempotent ingestion; partial lines, truncation, rotation |
 | `runpeek.agents.diagnostics` | deterministic detectors; one consolidated item per evidence run |
 | `runpeek.agents.watch` / `report` | the live feed and review surfaces |
@@ -43,7 +53,9 @@ never summed into one total.
 - The wrapped SDK method runs exactly once; its result or exception passes through.
 - Unknown usage, unknown prices and unknown billing stay unknown — never zero.
 - One current estimate per (charge, perspective); identical inputs are idempotent.
-- Re-reading a transcript never duplicates a row (natural keys everywhere).
+- Re-reading a transcript never duplicates a row (natural keys everywhere); a
+  usage record replayed by a resumed/forked transcript is counted once.
+- A session is counted under at most one work item.
 - Nothing content-like reaches the store, exports, findings or errors.
 - Each tool call contributes to at most one finding.
 

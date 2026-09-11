@@ -18,10 +18,10 @@ from typing import Any
 from .. import ui
 from ..rates import RateCardSet
 from ..ui import Term, sanitize
-from . import claude_code, diagnostics
+from . import diagnostics
 from .diagnostics import title_for
 from .events import TranscriptFile
-from .ingest import Ingestor, IngestStats, history_cutoff
+from .ingest import ADAPTERS, SOURCES, Ingestor, IngestStats, history_cutoff
 
 UPDATE_RATE_LIMIT_S = 60.0
 WAITING_NOTE_S = 600.0
@@ -41,8 +41,10 @@ class Watcher:
         verbose: bool = False,
         term: Term | None = None,
         out: Callable[[str], None] | None = None,
+        sources: tuple[str, ...] = SOURCES,
     ) -> None:
         self.conn = conn
+        self.sources = tuple(s for s in sources if s in ADAPTERS) or SOURCES
         self.project = str(project) if project is not None else None
         self.all_projects = all_projects
         self.history = history
@@ -71,8 +73,14 @@ class Watcher:
 
     # ------------------------------------------------------------------ setup
 
+    def labels(self) -> str:
+        names = [str(ADAPTERS[s].LABEL) for s in self.sources]
+        return " and ".join(names) if len(names) <= 2 else ", ".join(names[:-1]) + " and " + names[-1]
+
     def discover(self) -> list[TranscriptFile]:
-        found = claude_code.discover(self.project, all_projects=self.all_projects)
+        found: list[TranscriptFile] = []
+        for src in self.sources:
+            found.extend(ADAPTERS[src].discover(self.project, all_projects=self.all_projects))
         new = [tf for tf in found if str(tf.path) not in self._files]
         for tf in found:
             self._files[str(tf.path)] = tf
@@ -89,8 +97,8 @@ class Watcher:
         scope = "all projects" if self.all_projects else ui.project_name(self.project)
         self._emit(t.bold("RUNPEEK / LIVE WATCH"))
         self._emit("")
-        self._emit(f"Watching Claude Code in {scope}")
-        self._emit("Use Claude Code normally. This terminal shows activity")
+        self._emit(f"Watching {self.labels()} in {scope}")
+        self._emit("Use your coding agent normally. This terminal shows activity")
         self._emit("and potential inefficiencies as they appear.")
         self._emit("")
         self._emit(t.green("Local collection · no uploads"))
@@ -98,11 +106,17 @@ class Watcher:
         self._emit("File paths and usage metadata are stored.")
         if self.verbose:
             self._emit("")
-            self._emit(t.dim(f"adapter: claude-code transcripts, built against writer versions "
-                             f"{claude_code.INSPECTED_WRITER_VERSIONS} (format undocumented, experimental)"))
-            where = (str(claude_code.claude_home() / "projects") if self.all_projects
-                     else str(claude_code.project_dir(self.project or "")))
-            self._emit(t.dim(f"reading: {sanitize(where)} (read-only)"))
+            for src in self.sources:
+                a = ADAPTERS[src]
+                if src == "claude-code":
+                    where = (str(a.claude_home() / "projects") if self.all_projects
+                             else str(a.project_dir(self.project or "")))
+                    built = a.INSPECTED_WRITER_VERSIONS
+                else:
+                    where = str(a.codex_home() / "sessions")
+                    built = a.INSPECTED_CLI_VERSIONS
+                self._emit(t.dim(f"adapter: {src}, built against versions {built} (format undocumented,"
+                                 f" experimental); reading {sanitize(where)} (read-only)"))
             self._emit(t.dim(f"polling every {self.interval_s:g}s, directory rescan every {self.rescan_s:g}s"))
         self._emit("")
 
@@ -151,13 +165,13 @@ class Watcher:
                        f"{'s' if hist['s'] != 1 else ''} (not replayed here) · runpeek findings"
                        + (" --all-projects" if self.all_projects else f" --project {self.project}"))
         for sid in stats.unknown_version_sessions:
-            self._emit(self.term.amber(f"Note: session {sid[:8]} uses a transcript version this adapter was not"
-                                       " built for; parsed best-effort."))
+            self._emit(self.term.amber(f"Note: session {sid[:8]} uses a record format version this adapter was"
+                                       " not built for; parsed best-effort."))
         self._emit("")
         self._emit("New activity appears below.")
-        self._emit("Ctrl-C stops watching. Your Claude session keeps running.")
+        self._emit("Ctrl-C stops watching. Your agent sessions keep running.")
         self._emit("")
-        self._emit(self.term.dim("Experimental Claude Code integration"))
+        self._emit(self.term.dim(f"Experimental {self.labels()} integration"))
         self._emit(self.term.dim(f"Review: {self._review_cmd()}"))
         self._emit("")
 
@@ -229,13 +243,16 @@ class Watcher:
         self._announced_sessions.add(tf.session_id)
         sid = tf.session_id.split("/")[-1][:8]
         kind = "SUBAGENT" if tf.is_subagent else "SESSION"
+        agent = ADAPTERS[tf.source].LABEL
         if tf.session_id in self._known_at_live_start:
             # Existed before watching started: it resumed, it did not begin now.
             self._event(self.term.green(f"{kind} ACTIVE"),
-                        [f"{ui.project_name(tf.project_path)} · activity at {ui.clock(at)} · session {sid}"], at=at)
+                        [f"{ui.project_name(tf.project_path)} · {agent} · activity at {ui.clock(at)} · session {sid}"],
+                        at=at)
         else:
             self._event(self.term.green(f"NEW {kind}"),
-                        [f"{ui.project_name(tf.project_path)} · started {ui.clock(at)} · session {sid}"], at=at)
+                        [f"{ui.project_name(tf.project_path)} · {agent} · started {ui.clock(at)} · session {sid}"],
+                        at=at)
 
     def _on_ingest_event(self, kind: str, tf: TranscriptFile, p: dict[str, Any]) -> None:
         sid = tf.session_id.split("/")[-1][:8]

@@ -1,4 +1,4 @@
-# Coding-agent sources — capability check (2026-09-09)
+# Coding-agent sources — capability check (2026-09-10)
 
 What each tool exposes, where the evidence came from, and what the observer
 can therefore honestly measure. "Verified" means inspected on this machine or
@@ -22,34 +22,38 @@ files written by 2.1.202–2.1.257, structure only (keys, counts; no content).
 | Permissions / config | none needed: transcripts are the user's own files, read-only | — | — | — |
 | Format stability | writer `version` on every entry; adapter gated on major.minor `2.1` | verified | — | other versions parsed best-effort and marked `unknown_version` |
 
-## Codex — not yet supported (interface designed, adapter not built)
+## Codex — supported (adapter `runpeek.agents.codex`, experimental)
 
-Installed: no `codex` CLI on PATH; `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
-present from the VS Code extension (37 files; `session_meta.cli_version`
-0.130–0.153). Public documentation for session files, hooks or usage could not
-be located (developers.openai.com/codex redirects; configuration pages 404).
+Inspected 2026-09-10: 38 rollout files under `~/.codex/sessions/YYYY/MM/DD/`
+written by Codex CLI 0.130.0-alpha.5 … 0.153.1 (Codex Desktop / VS Code),
+structure only. No public documentation of the rollout format was found, so
+every row is "verified on disk". Three sanitised real files are test fixtures
+(`tests/fixtures/codex/`, produced by `sanitize.py` there).
 
 | Capability | Available | Source | Per-event / cumulative / estimate | Missing |
 |---|---|---|---|---|
-| Session identity | yes: `session_meta.payload.{session_id,id,cwd,cli_version,source,originator}` | verified on disk (undocumented) | — | — |
-| Turn identity | partial: `event_msg` `task_started` / `task_complete` / `turn_aborted` | verified on disk | per task | no stable prompt id observed |
-| Tool executions | yes: `response_item` `function_call` / `function_call_output` (`call_id`, `name`), `custom_tool_call(_output)`, `web_search_call` | verified on disk | per call | error flag not observed at the top level; output is content |
-| Provider usage | yes: `event_msg` `token_count` with `info.last_token_usage` (per turn) **and** `info.total_token_usage` (**cumulative**); fields `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens`, `reasoning_output_tokens`, `total_tokens` | verified on disk | per turn + cumulative snapshot — an adapter must use `last_token_usage` or diff consecutive totals, never sum snapshots | model not on the event (session-level `model` in config) |
-| Source-reported cost | not observed | — | — | — |
-| Hooks | undocumented / not found | — | — | — |
+| Session identity | yes: the file name's uuid (`rollout-<ts>-<uuid>.jsonl`). `session_meta.session_id` is the **root** session for subagent files, so it is not used as identity | verified on disk | — | — |
+| Project | `session_meta.cwd`; `git.branch` (and `repository_url` on some versions) | verified | — | commit hash not stored |
+| Subagents | 0.153+: `thread_source: subagent`, `parent_thread_id`, `forked_from_id`, `subagent_history_start_ordinal`; the parent records `SubAgentActivity` items | verified (2 subagent files) | — | the child file starts with a copy of the parent's history; usage below the start ordinal is skipped (none was observed there) |
+| Turn identity | `event_msg` `task_started` (`turn_id`, `started_at`), `task_complete`, `turn_aborted` (`duration_ms`); `turn_context` names the turn's `model` | verified | per turn | `task_complete` has no duration: derived from `started_at` |
+| Tool executions | `response_item` `custom_tool_call` (`exec`, `apply_patch`) and `function_call` (`exec_command`, `view_image`, `spawn_agent`, …) keyed by `call_id`; outputs in `*_output`; `item_completed` `McpToolCall` (status/error) and `WebSearch` | verified | per call | error flag only when the output carries an exit code or the MCP item failed; otherwise NULL |
+| Provider usage | `event_msg` `token_count` with `info.total_token_usage` (**cumulative**) and `info.last_token_usage`; fields `input_tokens` (includes cached), `cached_input_tokens`, `cache_write_input_tokens` (always 0 observed), `output_tokens` (includes reasoning), `reasoning_output_tokens` | verified on 3,847 events | **one usage row per increase of the cumulative total**. `last_token_usage` repeated the previous value in 112 events (after `turn_aborted`) and disagreed with the total delta in 1; totals never decreased | model comes from the last `turn_context` / `thread_settings_applied`; 12 events preceded any (unpriced, counted) |
+| Response ids | 0.153+: `token_usage_record.response_id` | verified | attached to the next usage row | absent on older versions |
+| Source-reported cost | **no** (rate-limit percentages only) | — | — | — |
+| API-equivalent cost | calculated | rate cards `openai-list@…` | estimate | subscription users: not a charge |
+| Format stability | `cli_version` in `session_meta`; adapter gated on `0.130`–`0.153` | verified | — | other versions parsed best-effort and marked `unknown_version` |
 
-Design path for the Codex adapter: same `events.py` vocabulary; `UsageEvent`
-with `usage_kind="cumulative_snapshot"` for `total_token_usage` and
-`per_request` for `last_token_usage`, keyed by `(session_id, ordinal)`; the
-ingestor already refuses to sum snapshots. Building it is gated on either a
-documented interface or a second structural inspection against a pinned
-`cli_version`.
+Parent/child independence was checked, not assumed: the first `token_count`
+in a subagent file has `total == last`, i.e. the child's counter starts at
+zero and the parent's totals do not include it.
 
 ## What the observer refuses to claim, for both
 
 - That a repeated file read was re-billed as input (not observable).
 - Token or dollar *savings* from any finding.
 - That silence, a permission wait, or user thinking is a stalled agent.
+- That a resumed or forked transcript's replayed usage is new usage: it is
+  counted once, under the first session that recorded it, and reported.
 - That an API-equivalent figure is what a subscription user paid.
 - Capture coverage: sessions written elsewhere than the documented location, or
   by other tools, are invisible and the summary says so.

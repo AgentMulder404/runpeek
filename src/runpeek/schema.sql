@@ -192,7 +192,13 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   entries_ingested    INTEGER NOT NULL DEFAULT 0,
   entries_unparseable INTEGER NOT NULL DEFAULT 0,
   customer_id         TEXT,                      -- explicit mapping only (runpeek session <id> --set-customer)
-  job_name            TEXT
+  job_name            TEXT,
+  provider            TEXT,                      -- anthropic | openai (model provider behind the agent)
+  git_branch          TEXT,                      -- first branch the source reported; a hint, never an assignment
+  repository_url      TEXT,
+  usage_duplicates    INTEGER NOT NULL DEFAULT 0, -- usage records already counted under another session
+  duplicate_of_session_id TEXT,                  -- the session that owns those records (resumed/forked copy)
+  usage_consistency   TEXT                       -- JSON counters from the adapter (stale repeats, resets, ...)
 );
 
 CREATE TABLE IF NOT EXISTS agent_turns (
@@ -243,9 +249,23 @@ CREATE TABLE IF NOT EXISTS agent_usage (
   api_equiv_status      TEXT NOT NULL,           -- priced | unpriced | no_usage
   rate_card_id          TEXT,
   rate_resolution       TEXT,
-  calc_version          INTEGER
+  calc_version          INTEGER,
+  provider              TEXT,                    -- anthropic | openai
+  reasoning_tokens      INTEGER,                 -- part of output_tokens (informational)
+  ordinal               INTEGER                  -- position of the source record, for tracing
 );
 CREATE INDEX IF NOT EXISTS ix_agent_usage_session ON agent_usage (session_id);
+
+-- A usage record seen again under a different session (a resumed or forked
+-- transcript copies history). It is counted once, under the owner; this row
+-- keeps the evidence so a report can say what was shared.
+CREATE TABLE IF NOT EXISTS agent_usage_duplicates (
+  usage_id         TEXT NOT NULL,
+  session_id       TEXT NOT NULL,                -- the session that saw the copy
+  owner_session_id TEXT NOT NULL,                -- the session it is counted under
+  seen_at          TEXT NOT NULL,
+  PRIMARY KEY (usage_id, session_id)
+);
 
 CREATE TABLE IF NOT EXISTS agent_findings (
   finding_id  TEXT PRIMARY KEY,
@@ -277,3 +297,43 @@ CREATE TABLE IF NOT EXISTS watch_checkpoints (
   head_sha        TEXT,                          -- sha256 of the first bytes; detects rewrites that reuse an inode
   updated_at      TEXT NOT NULL
 );
+
+-- ---------------------------------------------------------------------------
+-- Work items: the unit of accounting across sessions, agents, models, retries
+-- and subagents. A session belongs to at most one work item (primary key on
+-- session_id), so no usage can be counted under two items. Assignment is
+-- explicit; repository/branch/issue only *suggest*.
+
+CREATE TABLE IF NOT EXISTS work_items (
+  work_item_id   TEXT PRIMARY KEY,               -- wi-<6 hex>
+  name           TEXT NOT NULL,
+  kind           TEXT NOT NULL,                  -- task | feature | bugfix | deployment
+  repository     TEXT,                           -- project path or repository url, as the user gave it
+  status         TEXT NOT NULL DEFAULT 'open',   -- open | closed
+  outcome        TEXT,                           -- completed | incomplete | failed | abandoned (NULL while open)
+  issue_ref      TEXT,
+  branch         TEXT,
+  pr_ref         TEXT,
+  deployment_ref TEXT,
+  note           TEXT,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  closed_at      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS work_item_sessions (
+  session_id   TEXT PRIMARY KEY,
+  work_item_id TEXT NOT NULL,
+  assigned_at  TEXT NOT NULL,
+  assigned_by  TEXT NOT NULL DEFAULT 'user'      -- user (explicit). Suggestions are never written here.
+);
+CREATE INDEX IF NOT EXISTS ix_work_item_sessions_item ON work_item_sessions (work_item_id);
+
+CREATE TABLE IF NOT EXISTS work_item_events (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  work_item_id TEXT NOT NULL,
+  at           TEXT NOT NULL,
+  kind         TEXT NOT NULL,                    -- created | assigned | reassigned | unassigned | status | edited
+  detail       TEXT                              -- JSON
+);
+CREATE INDEX IF NOT EXISTS ix_work_item_events_item ON work_item_events (work_item_id);

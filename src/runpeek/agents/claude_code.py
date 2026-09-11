@@ -48,6 +48,8 @@ from .events import (
 
 SOURCE = "claude-code"
 PROVIDER = "anthropic"
+LABEL = "Claude Code"
+RECORDS_LABEL = "Claude Code transcripts"
 SUPPORTED_MAJOR_MINOR = ("2.1",)
 INSPECTED_WRITER_VERSIONS = "2.1.202–2.1.257 (CLI 2.1.258 installed)"
 
@@ -97,12 +99,12 @@ def discover(project_path: str | Path | None, *, all_projects: bool = False) -> 
         if not pdir.is_dir():
             continue
         for f in sorted(pdir.glob("*.jsonl")):
-            out.append(TranscriptFile(path=f, session_id=f.stem, project_path=ppath))
+            out.append(TranscriptFile(path=f, session_id=f.stem, project_path=ppath, source=SOURCE))
             sub = pdir / f.stem / "subagents"
             if sub.is_dir():
                 for sf in sorted(sub.glob("*.jsonl")):
                     out.append(TranscriptFile(path=sf, session_id=f"{f.stem}/{sf.stem}", project_path=ppath,
-                                              parent_session_id=f.stem))
+                                              parent_session_id=f.stem, source=SOURCE))
     return out
 
 
@@ -184,8 +186,13 @@ class Parser:
         self._turn_ns = session_id.split("/")[-1][:8] if "/" in session_id else None
         self.cwd: str | None = None
         self.version: str | None = None
+        self.git_branch: str | None = None
+        self.repository_url: str | None = None
+        self.provider = PROVIDER
         self.current_turn: str | None = None
         self._seen_turns: set[str] = set()
+        # usage-consistency counters, stored on the session (JSON) for the coverage report
+        self.counters: dict[str, int] = {"usage_without_model": 0}
 
     def parse_line(self, line: str, line_no: int) -> Iterator[Event]:
         try:
@@ -198,10 +205,12 @@ class Parser:
             return
         t = e.get("type")
         ts = e.get("timestamp") if isinstance(e.get("timestamp"), str) else None
+        if isinstance(e.get("gitBranch"), str) and e["gitBranch"] and not self.git_branch:
+            self.git_branch = e["gitBranch"]
         if e.get("version") and not self.version:
             self.version = str(e["version"])
             cwd = e.get("cwd") if isinstance(e.get("cwd"), str) else None
-            yield SessionInfo(self.session_id, self.version, cwd, ts)
+            yield SessionInfo(self.session_id, self.version, cwd, ts, git_branch=self.git_branch)
         if isinstance(e.get("cwd"), str) and not self.cwd:
             self.cwd = e["cwd"]
         if t == "user":
@@ -242,6 +251,8 @@ class Parser:
         mid = m.get("id") if isinstance(m.get("id"), str) else None
         u = m.get("usage")
         if mid and isinstance(u, dict):
+            if not isinstance(m.get("model"), str):
+                self.counters["usage_without_model"] += 1
             raw_cc, raw_stu = u.get("cache_creation"), u.get("server_tool_use")
             cc: dict[str, Any] = raw_cc if isinstance(raw_cc, dict) else {}
             stu: dict[str, Any] = raw_stu if isinstance(raw_stu, dict) else {}
@@ -258,6 +269,7 @@ class Parser:
                 output_tokens=_int(u.get("output_tokens")),
                 web_search_requests=_int(stu.get("web_search_requests")),
                 web_fetch_requests=_int(stu.get("web_fetch_requests")),
+                provider=PROVIDER,
             )
         for b in m.get("content") or []:
             if isinstance(b, dict) and b.get("type") == "tool_use" and isinstance(b.get("id"), str):

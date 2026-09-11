@@ -3,6 +3,67 @@
 All notable changes to RunPeek are recorded here. The project is pre-release;
 versions below 1.0 may change interfaces between minor versions.
 
+## 0.2.0a1 — 2026-09-10 — work items, Codex, trustworthy cross-agent accounting
+
+Coding-agent accounting is now the primary product. The SDK harness
+(`runpeek run`) is unchanged and still supported.
+
+**Work items** (`runpeek work …`)
+- Persistent work items — task, feature, bugfix, deployment — with a stable
+  id, name, repository, status (open/closed), outcome (completed, incomplete,
+  failed, abandoned) and optional issue, branch, PR and deployment references.
+- Explicit assignment of sessions (`assign`, `unassign`, reassignment is
+  recorded). A session belongs to at most one item; subagent sessions follow
+  their parent unless assigned elsewhere. Nothing is assigned automatically:
+  `suggest` lists unassigned sessions that match the repository or branch.
+- `work show`: estimated model cost labelled as API-equivalent at list prices,
+  breakdown by agent, model and session, a spending timeline, outcome,
+  unpriced activity and missing usage as a priced subtotal with coverage,
+  pricing provenance (rate card, resolution, calculation version) and
+  `--trace` for the source usage records with their ids. `--pin` re-prices one
+  provider's calls under a chosen card for that view only.
+- `sessions` shows the agent and work item per session; `--unassigned`.
+
+**Codex adapter** (`runpeek.agents.codex`, experimental) — built against 38
+real rollout files from Codex CLI 0.130–0.153 on the maintainer's machine;
+three sanitised real records ship as test fixtures.
+- Usage is the *difference of consecutive cumulative totals*, never a sum of
+  `last_token_usage` (112 of 3,847 inspected events repeated the previous value
+  after `turn_aborted`). Repeats are counted and reported, never priced.
+- Subagent threads (`thread_source: subagent`) are linked to their parent by
+  the file's thread id; the copied history prefix is skipped; totals were
+  verified to restart at zero, so parent and child usage are independent.
+- Token categories normalised: `input_tokens` is uncached input; cached and
+  reasoning tokens are kept separately. `token_usage_record` (0.153+) supplies
+  the response id only.
+- Tool calls from `function_call` / `custom_tool_call`, MCP calls and web
+  searches from completed items; exit codes become error flags where present,
+  otherwise NULL (not "success").
+
+**Accounting**
+- A usage record seen again under another session (resumed or forked
+  transcript; 268 such Claude Code message ids found on the maintainer's
+  machine) is counted once under the first session and recorded in
+  `agent_usage_duplicates`; sessions and reports say what was shared.
+- Resuming ingestion mid-file replays the consumed prefix so stateful
+  adapters (cumulative totals, current turn, model) continue correctly.
+- Rate card `openai-list@2026-09-10` adds `gpt-5.5` (verified 2026-09-10 at
+  developers.openai.com/api/docs/pricing); every other price re-verified equal.
+  Anthropic prices re-verified equal on 2026-09-10. Usage before a model's
+  verification date stays unpriced under the effective-at-execution rule.
+- Tool results without an observed error flag are stored as NULL, not 0.
+
+**Schema** (forward-only, applied on open): new columns on `agent_sessions`
+(`provider`, `git_branch`, `repository_url`, `usage_duplicates`,
+`duplicate_of_session_id`, `usage_consistency`) and `agent_usage`
+(`provider`, `reasoning_tokens`, `ordinal`); new tables
+`agent_usage_duplicates`, `work_items`, `work_item_sessions`,
+`work_item_events`. All exported by `runpeek export`.
+
+**CLI wording**: `watch` defaults to `--source all` (Claude Code and Codex);
+the sessions list is "RECENT CODING-AGENT SESSIONS".
+
+
 ## 0.1.0a1 — 2026-09-10 — first public pre-release (PyPI, GitHub)
 
 RunPeek is an early, local-first observability harness. It is **not** stable

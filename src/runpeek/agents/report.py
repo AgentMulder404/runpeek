@@ -14,9 +14,25 @@ from typing import Any
 from .. import ui
 from ..ui import Term, sanitize
 from .diagnostics import title_for
+from .ingest import ADAPTERS
+from .work import assignment_map
 
 COST_NOTE = ("API-equivalent estimate at list prices. Not your subscription charge, quota usage, or proven "
-             "savings. Usage is as reported in Claude Code transcripts, not independently verified billing.")
+             "savings. Usage is as reported in agent session records, not independently verified billing.")
+
+
+def records_label(source: str | None) -> str:
+    a = ADAPTERS.get(str(source))
+    return str(a.RECORDS_LABEL) if a else "agent session records"
+
+
+def agent_label(source: str | None) -> str:
+    a = ADAPTERS.get(str(source))
+    return str(a.LABEL) if a else str(source or "?")
+
+
+def cost_note(source: str | None) -> str:
+    return COST_NOTE.replace("agent session records", records_label(source))
 
 
 # --------------------------------------------------------------------------- queries
@@ -111,14 +127,18 @@ def resolve_session_id(conn: sqlite3.Connection, prefix: str) -> str | list[str]
 
 
 def render_sessions(conn: sqlite3.Connection, project: str | None, last: int = 20, *, include_empty: bool = False,
-                    detailed: bool = False, term: Term | None = None, now: datetime | None = None) -> str:
+                    detailed: bool = False, unassigned: bool = False, term: Term | None = None,
+                    now: datetime | None = None) -> str:
     term = term or Term(color=False)
     rows = _session_rows(conn, project, None)
+    assigned = assignment_map(conn)
     shown = [r for r in rows if include_empty or not _empty(r)]
-    hidden_empty = len(rows) - len(shown)
+    if unassigned:
+        shown = [r for r in shown if str(r["session_id"]) not in assigned]
+    hidden_empty = len(rows) - len(shown) if not unassigned else 0
     shown = shown[:last]
     L: list[str] = []
-    L.append(term.bold("RECENT CLAUDE CODE SESSIONS"))
+    L.append(term.bold("RECENT CODING-AGENT SESSIONS" + (" — NOT ASSIGNED TO A WORK ITEM" if unassigned else "")))
     if project:
         L.append(f"Project: {ui.project_name(project)} ({sanitize(project)})")
     else:
@@ -127,6 +147,9 @@ def render_sessions(conn: sqlite3.Connection, project: str | None, last: int = 2
              + (f" · {hidden_empty} empty transcript(s) hidden (--include-empty)" if hidden_empty else ""))
     L.append("")
     if not shown:
+        if unassigned:
+            L.append("Every collected session is assigned to a work item.")
+            return "\n".join(L)
         if project:
             L.append(f"No collected sessions for {sanitize(project)}.")
             L.append("The watcher may be collecting another project.")
@@ -138,7 +161,8 @@ def render_sessions(conn: sqlite3.Connection, project: str | None, last: int = 2
                 for p, n in others[:10]:
                     L.append(f"  {sanitize(p)}  ({n} session{'s' if n != 1 else ''})")
         else:
-            L.append("No sessions collected yet. Start `runpeek watch` in a project and use Claude Code normally.")
+            L.append("No sessions collected yet. Start `runpeek watch` in a project and use your coding agent"
+                     " normally.")
         return "\n".join(L)
 
     ids = short_ids([str(r["session_id"]) for r in shown])
@@ -151,22 +175,26 @@ def render_sessions(conn: sqlite3.Connection, project: str | None, last: int = 2
             children.setdefault(str(r["parent_session_id"]), []).append(r)
 
     if detailed:
-        L.append(f"{'Started':<18}{'Session':<14}{'Tool calls':>11}{'Errors':>8}{'Model calls':>12}{'Input':>9}"
-                 f"{'Cache r':>9}{'Cache w':>9}{'Output':>9}{'Est. cost':>11}{'Review':>8}")
+        L.append(f"{'Started':<18}{'Session':<14}{'Agent':<8}{'Tool calls':>11}{'Errors':>8}"
+                 f"{'Model calls':>12}{'Input':>9}{'Cache r':>9}{'Cache w':>9}{'Output':>9}{'Est. cost':>11}"
+                 f"{'Review':>8}  Work item")
     else:
-        L.append(f"{'Started':<18}{'Session':<14}{'Tool calls':>11}{'Errors':>8}{'Model calls':>12}{'Review':>8}"
-                 + ("  State" if include_empty else ""))
+        L.append(f"{'Started':<18}{'Session':<14}{'Agent':<8}{'Tool calls':>11}{'Errors':>8}"
+                 f"{'Model calls':>12}{'Review':>8}  Work item" + ("  State" if include_empty else ""))
 
     def line(r: sqlite3.Row, indent: str = "") -> str:
         sid = ids[str(r["session_id"])]
         started = (indent + ui.when(_started(r), now)).ljust(18)
-        base = f"{started}{sid:<14}{r['actions']:>11}{r['errors']:>8}{r['requests']:>12}"
+        agent = agent_label(r["source"])[:7]
+        base = f"{started}{sid:<14}{agent:<8}{r['actions']:>11}{r['errors']:>8}{r['requests']:>12}"
+        wi = assigned.get(str(r["session_id"]))
+        work = "—" if wi is None else (wi[0] if wi[1] == "explicit" else f"{wi[0]} (via parent)")
         if detailed:
             cost = ui.usd_cents(r["equiv"]) + ("+?" if r["unpriced"] else "") if r["requests"] else "—"
             base += (f"{_k(r['inp']):>9}{_k(r['cr']):>9}{_k(r['cw']):>9}{_k(r['outp']):>9}{cost:>11}"
-                     f"{r['findings']:>8}")
+                     f"{r['findings']:>8}  {work}")
         else:
-            base += f"{r['findings']:>8}"
+            base += f"{r['findings']:>8}  {work}"
             if include_empty:
                 st = _state(r)
                 base += f"  {st}" if st else ""
@@ -179,9 +207,10 @@ def render_sessions(conn: sqlite3.Connection, project: str | None, last: int = 2
     for r in orphans:
         L.append(line(r) + f"  (subagent of {sanitize(str(r['parent_session_id']))[:8]})")
     L.append("")
-    L.append("Review = potential inefficiencies to look at.")
+    L.append("Review = potential inefficiencies to look at. Work item: set with runpeek work assign <work-item>"
+             " <session-id>")
     if detailed:
-        L.append("Tokens are as reported in Claude Code transcripts. Est. cost: " + COST_NOTE)
+        L.append("Tokens are as reported in agent session records. Est. cost: " + COST_NOTE)
         L.append("'+?' = some model calls could not be priced (model not in the rate card).")
     L.append("")
     first = parents[0] if parents else shown[0]
@@ -189,6 +218,8 @@ def render_sessions(conn: sqlite3.Connection, project: str | None, last: int = 2
     L.append(f"  runpeek session {ids[str(first['session_id'])]}")
     if not detailed:
         L.append("Usage and estimated cost per session: runpeek sessions --detailed")
+    if not unassigned and any(str(r["session_id"]) not in assigned for r in shown):
+        L.append("Sessions not on a work item: runpeek sessions --unassigned")
     return "\n".join(L)
 
 
@@ -214,7 +245,18 @@ def render_session(conn: sqlite3.Connection, session_id: str, *, findings_only: 
     L.append(term.bold(f"SESSION {short}") + f"  ·  {ui.project_name(s['project_path'])} · started "
              f"{ui.when(_started(row), now)}" + ("  ·  subagent of " + sanitize(str(s["parent_session_id"]))[:8]
                                                  if s["is_subagent"] else ""))
-    L.append(f"Project: {sanitize(s['project_path'] or '(unknown)')}")
+    L.append(f"Project: {sanitize(s['project_path'] or '(unknown)')}  ·  Agent: {agent_label(s['source'])}"
+             + (f"  ·  branch {sanitize(s['git_branch'])}" if s["git_branch"] else ""))
+    wi, how = assignment_map(conn).get(session_id, (None, "none"))
+    if wi:
+        w = conn.execute("SELECT name FROM work_items WHERE work_item_id = ?", (wi,)).fetchone()
+        L.append(f"Work item: {wi} {sanitize(w['name']) if w else ''}"
+                 + (" (via parent session)" if how == "via_parent" else " (assigned explicitly)"))
+    else:
+        L.append(f"Work item: none — runpeek work assign <work-item> {short}")
+    if s["usage_duplicates"]:
+        L.append(term.amber(f"{s['usage_duplicates']} model calls in this transcript were already counted under "
+                            f"session {str(s['duplicate_of_session_id'])[:8]} (resumed/forked copy); counted once."))
     if s["customer_id"] or s["job_name"]:
         L.append(f"Label: customer {sanitize(s['customer_id'] or '-')} · job {sanitize(s['job_name'] or '-')}"
                  " (set by you)")
@@ -299,8 +341,8 @@ def render_session(conn: sqlite3.Connection, session_id: str, *, findings_only: 
                 fb = "  (fallback rate card)" if m["res"] and str(m["res"]).startswith("fallback") else ""
                 L.append(f"    {sanitize(m['model'] or '(unknown model)'):<30}{m['n']:>5} calls"
                          f"  {ui.usd_exact(m['c']):>12}{note}{fb}")
-            L.append("  Source-reported cost: not available in Claude Code transcripts.")
-            for ln in term.wrap(COST_NOTE, indent=2):
+            L.append(f"  Source-reported cost: not available in {records_label(s['source'])}.")
+            for ln in term.wrap(cost_note(s["source"]), indent=2):
                 L.append(ln)
         else:
             L.append("  No model calls with usage were recorded for this session.")

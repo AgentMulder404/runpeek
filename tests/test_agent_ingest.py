@@ -311,3 +311,33 @@ def test_watcher_run_once_and_clean_stop(home: Path, conn: sqlite3.Connection) -
     assert any(ln.startswith("Stopped watching. Since watching started") for ln in lines)
     cp = conn.execute("SELECT COUNT(*) FROM watch_checkpoints").fetchone()[0]
     assert cp == 2
+
+
+def test_forked_transcript_replays_are_counted_once_and_recorded(home: Path, conn: sqlite3.Connection) -> None:
+    """A resumed/forked Claude Code session writes a new file that starts with a copy of the
+    old entries (same message ids). Verified on real transcripts: 268 message ids shared
+    between two main files. Usage is counted once, under the first session; the copy is recorded."""
+    a = Transcript(home, PROJECT)
+    a.user_prompt()
+    a.text(usage=usage_block(inp=1000, out=100))
+    a.text(usage=usage_block(inp=2000, out=200))
+    _ingest_all(conn)
+    b = Transcript(home, PROJECT)
+    b.append_raw(a.path.read_text())  # copied history, same message ids
+    b.user_prompt()
+    b.text(usage=usage_block(inp=3000, out=300))
+    s = _ingest_all(conn)
+    assert s.duplicate_usage == 2 and s.usage == 1
+    tot = conn.execute("SELECT COALESCE(SUM(input_tokens),0) FROM agent_usage").fetchone()[0]
+    assert tot == 6000  # not 9000
+    rows = conn.execute("SELECT session_id, COUNT(*) n FROM agent_usage GROUP BY session_id").fetchall()
+    assert {r["session_id"]: r["n"] for r in rows} == {a.session_id: 2, b.session_id: 1}
+    sb = conn.execute("SELECT usage_duplicates, duplicate_of_session_id FROM agent_sessions WHERE session_id = ?",
+                      (b.session_id,)).fetchone()
+    assert sb["usage_duplicates"] == 2 and sb["duplicate_of_session_id"] == a.session_id
+    assert _count(conn, "agent_usage_duplicates") == 2
+    _ingest_all(conn)  # re-import changes nothing
+    assert _count(conn, "agent_usage_duplicates") == 2 and _count(conn, "agent_usage") == 3
+    from runpeek.agents.report import render_session
+
+    assert "already counted under" in render_session(conn, b.session_id)

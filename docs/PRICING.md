@@ -12,7 +12,17 @@ Shipped in `src/runpeek/rates/`, immutable once released:
 |---|---|---|---|---|
 | `openai-list@2025-08-01` | OpenAI | transcription, original release | — | 2025-08-01 |
 | `openai-list@2026-09-09` | OpenAI | developers.openai.com/api/docs/pricing | 2026-09-09 | 2026-09-09 (verification date, not evidence of when prices began) |
-| `anthropic-list@2026-09-09` | Anthropic | platform.claude.com/docs/en/about-claude/pricing | 2026-09-09 | 2026-09-09 (as above) |
+| `openai-list@2026-09-10` | OpenAI | developers.openai.com/api/docs/pricing | 2026-09-10 | 2026-09-10 — same prices as the 09-09 card plus `gpt-5.5` (5.00 / 0.50 / 30.00) |
+| `anthropic-list@2026-09-09` | Anthropic | platform.claude.com/docs/en/about-claude/pricing | 2026-09-09; re-verified equal 2026-09-10 | 2026-09-09 (as above) |
+
+Verification log: on 2026-09-10 every model on both OpenAI cards and the
+Anthropic card was compared against the live page and found equal; `gpt-5.5`
+was the only priced model missing and was added in a new dated card. Nothing
+is backdated: usage of `gpt-5.5` (or any model) before its verification date
+resolves to the card effective then and is reported unpriced if that card
+does not carry it. `runpeek work show --pin <card>` gives a view priced under
+a chosen card for that card's provider, labelled, without touching the stored
+estimates.
 
 Fields per model: `input`, `cached_input` (cache-read price), `output`, and
 for Anthropic `cache_write_5m` / `cache_write_1h`. Model lookup is exact name
@@ -36,9 +46,23 @@ OpenAI: `cached_tokens` is a subset of `prompt_tokens`; `reasoning_tokens` a
 subset of `completion_tokens` (verified against the SDK's usage types). Cost =
 `(prompt − cached) × input + cached × cached_input + completion × output`.
 
-Anthropic (Claude Code transcripts): `input_tokens`, `cache_creation` split
-into 5m/1h writes, `cache_read_input_tokens`, `output_tokens` — each priced at
-its own rate. Web-search requests are counted, not priced.
+Anthropic (Claude Code transcripts): `input_tokens` (already excludes cached),
+`cache_creation` split into 5m/1h writes, `cache_read_input_tokens`,
+`output_tokens` — each priced at its own rate. Web-search requests are
+counted, not priced.
+
+Codex records (OpenAI): `input_tokens` includes `cached_input_tokens`;
+`output_tokens` includes `reasoning_output_tokens`. The adapter stores
+uncached input, cache read and output separately (reasoning kept as
+information), so the same formula applies: `uncached × input + cached ×
+cached_input + output × output`. `cache_write_input_tokens` was 0 in every
+inspected record; a non-zero value would be priced at the input rate (OpenAI
+does not price cache writes separately).
+
+Usage in agent records is **per request** after normalisation: Claude Code
+usage is keyed by `message.id` (streaming writes several entries per
+response); Codex usage is the difference of consecutive cumulative totals
+(see `AGENT_SOURCES.md`). Neither source reports cost.
 
 ## Money
 

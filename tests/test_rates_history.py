@@ -37,7 +37,7 @@ def test_august_attempt_still_resolves_to_original_card() -> None:
 
 def test_september_attempt_resolves_to_new_card_with_equal_price() -> None:
     cards = RateCardSet.builtin()
-    card, res = cards.resolve(provider="openai", source="list", at=_at("2026-09-10T00:00:00"),
+    card, res = cards.resolve(provider="openai", source="list", at=_at("2026-09-09T12:00:00"),
                               fallback="nearest_earlier", pin=None)
     assert card is not None and card.rate_card_id == "openai-list@2026-09-09"
     assert res == "effective_at_execution"
@@ -45,6 +45,13 @@ def test_september_attempt_resolves_to_new_card_with_equal_price() -> None:
     assert old is not None
     for m in old.models:
         assert card.models[m] == old.models[m], m  # verified equal on the retrieval date
+    # the 2026-09-10 card (adds gpt-5.5, re-verified) takes over from its own date and keeps every price
+    newest, res2 = cards.resolve(provider="openai", source="list", at=_at("2026-09-10T00:00:00"),
+                                 fallback="nearest_earlier", pin=None)
+    assert newest is not None and newest.rate_card_id == "openai-list@2026-09-10" and res2 == "effective_at_execution"
+    for m in card.models:
+        assert newest.models[m] == card.models[m], m
+    assert newest.prices_for("gpt-5.5")[1] is not None and card.prices_for("gpt-5.5") == (None, None)
 
 
 def test_new_model_is_not_backdated() -> None:

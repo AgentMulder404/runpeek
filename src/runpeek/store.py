@@ -67,6 +67,16 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     ccols = {r[1] for r in conn.execute("PRAGMA table_info(watch_checkpoints)")}
     if "head_sha" not in ccols:
         conn.execute("ALTER TABLE watch_checkpoints ADD COLUMN head_sha TEXT")
+    scols = {r[1] for r in conn.execute("PRAGMA table_info(agent_sessions)")}
+    for name, decl in (("provider", "TEXT"), ("git_branch", "TEXT"), ("repository_url", "TEXT"),
+                       ("usage_duplicates", "INTEGER NOT NULL DEFAULT 0"), ("duplicate_of_session_id", "TEXT"),
+                       ("usage_consistency", "TEXT")):
+        if name not in scols:
+            conn.execute(f"ALTER TABLE agent_sessions ADD COLUMN {name} {decl}")
+    ucols = {r[1] for r in conn.execute("PRAGMA table_info(agent_usage)")}
+    for name, decl in (("provider", "TEXT"), ("reasoning_tokens", "INTEGER"), ("ordinal", "INTEGER")):
+        if name not in ucols:
+            conn.execute(f"ALTER TABLE agent_usage ADD COLUMN {name} {decl}")
 
 
 def _j(obj: Any) -> str | None:
