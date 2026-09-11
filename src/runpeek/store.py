@@ -43,6 +43,16 @@ def _stderr(msg: str) -> None:
 
 
 def open_connection(path: str | Path) -> sqlite3.Connection:
+    if str(path) != ":memory:":
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Create privately before SQLite opens it (including its WAL sidecars).
+        fd = os.open(target, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        else:
+            os.chmod(target, 0o600)  # Windows also relies on the containing directory ACL.
+        os.close(fd)
     conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None)
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA journal_mode = WAL")
@@ -215,7 +225,7 @@ class SQLiteStore:
     def start(self) -> None:
         if self._started:
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
             os.chmod(self.path.parent, 0o700)
         except OSError:

@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from ..ids import new_id, now_iso
 from ..money import tokens_cost_nanos
@@ -44,6 +44,16 @@ ADAPTERS: dict[str, Any] = {claude_code.SOURCE: claude_code, codex.SOURCE: codex
 SOURCES = tuple(ADAPTERS)
 MAX_LINE_BYTES = 16 * 1024 * 1024  # a single line longer than this is skipped, visibly
 HEAD_BYTES = 4096  # hashed at checkpoint time; a changed head means the file was rewritten, not appended
+
+
+def _bounded_line(stream: BinaryIO) -> tuple[bytes, int, bool]:
+    """Drain an oversized physical line without allocating its entire contents."""
+    first = stream.readline(MAX_LINE_BYTES + 1)
+    size, last = len(first), first
+    while last and not last.endswith(b"\n") and len(first) > MAX_LINE_BYTES:
+        last = stream.readline(MAX_LINE_BYTES + 1)
+        size += len(last)
+    return first, size, bool(last.endswith(b"\n"))
 
 
 def _head_sha(path: Path, limit: int) -> str | None:
@@ -119,6 +129,15 @@ class Ingestor:
     def ingest(self, tf: TranscriptFile, stats: IngestStats | None = None) -> IngestStats:
         stats = stats or IngestStats()
         stats.files_seen += 1
+        if self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='ledger_settings'").fetchone():
+            paused = self.conn.execute("SELECT value FROM ledger_settings WHERE key='collection_paused'").fetchone()
+            if paused and paused[0] == 'true':
+                return stats
+        if self.conn.execute(
+            "SELECT 1 FROM agent_usage WHERE session_id = ? AND usage_id GLOB '*:l[0-9]*' LIMIT 1",
+            (tf.session_id,),
+        ).fetchone():
+            raise ValueError("Legacy unstable usage IDs detected; run `runpeek repair --db <store>` before collecting.")
         try:
             st = os.stat(tf.path)
         except OSError:
@@ -167,14 +186,14 @@ class Ingestor:
             with open(tf.path, "rb") as fh:
                 fh.seek(offset)
                 while True:
-                    line = fh.readline()
+                    line, line_size, complete = _bounded_line(fh)
                     if not line:
                         break
-                    if not line.endswith(b"\n"):
+                    if not complete:
                         break  # partial write; wait for the newline
                     if len(line) > MAX_LINE_BYTES:
                         stats.oversized_lines += 1
-                        offset += len(line)
+                        offset += line_size
                         line_no += 1
                         continue
                     text = line.decode("utf-8", errors="replace")
@@ -182,7 +201,7 @@ class Ingestor:
                         stats.entries += 1
                         for ev in parser.parse_line(text, line_no):
                             self._apply(tf, parser, ev, stats)
-                    offset += len(line)
+                    offset += line_size
                     line_no += 1
             self._finish_session(tf, parser, stats)
             self._checkpoint(tf, st, offset, line_no)
@@ -198,10 +217,10 @@ class Ingestor:
                 consumed = 0
                 i = 0
                 while consumed < offset:
-                    line = fh.readline()
+                    line, line_size, _ = _bounded_line(fh)
                     if not line:
                         break
-                    consumed += len(line)
+                    consumed += line_size
                     if len(line) <= MAX_LINE_BYTES:
                         text = line.decode("utf-8", errors="replace")
                         if text.strip():

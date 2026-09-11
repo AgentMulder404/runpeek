@@ -703,6 +703,8 @@ def build_parser() -> argparse.ArgumentParser:
     fd.add_argument("--all-projects", action="store_true")
     fd.add_argument("--last", type=int, default=50)
     fd.set_defaults(fn=cmd_findings)
+    from .unified_cli import register
+    register(sub)
     return ap
 
 

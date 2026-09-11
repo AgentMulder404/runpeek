@@ -263,7 +263,7 @@ class Parser:
         self._call_ids: set[str] = set()
         # usage-consistency counters, stored on the session (JSON) for the coverage report
         self.counters: dict[str, int] = {"stale_usage_repeats": 0, "total_resets": 0, "usage_without_model": 0,
-                                         "usage_in_copied_prefix": 0}
+                                         "usage_in_copied_prefix": 0, "ambiguous_subagent_usage": 0}
 
     # ------------------------------------------------------------------ lines
 
@@ -354,6 +354,11 @@ class Parser:
         total = info.get("total_token_usage")
         last = info.get("last_token_usage")
         if not isinstance(total, dict):
+            return
+        if self._start_ordinal and ordinal is None:
+            # The prefix boundary is not a physical line offset. Without source
+            # ordinals we cannot distinguish copied parent usage from child usage.
+            self.counters["ambiguous_subagent_usage"] += 1
             return
         if self._start_ordinal is not None and ordinal is not None and ordinal < self._start_ordinal:
             self.counters["usage_in_copied_prefix"] += 1

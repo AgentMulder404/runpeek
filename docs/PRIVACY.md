@@ -1,13 +1,16 @@
 # Privacy and local storage
 
-RunPeek runs on your machine, makes no network calls of its own, has no
-account, and uploads nothing. Everything it keeps is in one SQLite file.
+Local collection uploads nothing. Version 0.3 adds **optional** device pairing and
+metadata sync to a self-hosted receiver; these make network requests only when you
+invoke them. See [shared accounting privacy and deployment boundaries](UNIFIED.md).
+Local records and remote workspace records are separate stores.
 
 ## Where
 
 `./.runpeek/runpeek.db` in the directory you run commands from (override with
 `--db` or `RUNPEEK_DB`). The directory is created `0700`, the file `0600`.
-Delete the file to delete everything.
+Stop collectors before deleting local database files and their WAL/SHM sidecars.
+Remote records, exports, source transcripts, credentials and backups require separate deletion.
 
 ## What is stored
 

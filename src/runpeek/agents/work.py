@@ -198,43 +198,36 @@ def unassign(conn: sqlite3.Connection, session_ids: list[str]) -> list[tuple[str
 
 def effective_assignment(conn: sqlite3.Connection, session_id: str) -> tuple[str | None, str]:
     """Resolve the nearest explicit ancestor, stopping safely on malformed cycles."""
-    seen: set[str] = set()
-    current = session_id
-    while current not in seen:
-        seen.add(current)
-        row = conn.execute("SELECT work_item_id FROM work_item_sessions WHERE session_id = ?",
-                           (current,)).fetchone()
-        if row:
-            return str(row["work_item_id"]), "explicit" if current == session_id else "via_parent"
-        parent = conn.execute("SELECT parent_session_id FROM agent_sessions WHERE session_id = ?",
-                              (current,)).fetchone()
-        if parent is None or not parent["parent_session_id"]:
-            break
-        current = str(parent["parent_session_id"])
-    return None, "none"
+    return assignment_map(conn).get(session_id, (None, "none"))
 
 
 def effective_sessions(conn: sqlite3.Connection, wid: str) -> list[tuple[sqlite3.Row, str]]:
-    """Use the same ancestry resolution for reports and assignment views."""
-    out: list[tuple[sqlite3.Row, str]] = []
-    for session in conn.execute(
+    """Use a single graph traversal for every assignment view."""
+    assignments = assignment_map(conn)
+    return [(s, assignments[str(s["session_id"])][1]) for s in conn.execute(
         "SELECT * FROM agent_sessions ORDER BY COALESCE(first_event_at, first_seen_at)"
-    ).fetchall():
-        owner, how = effective_assignment(conn, str(session["session_id"]))
-        if owner == wid:
-            out.append((session, how))
-    return out
+    ) if assignments.get(str(s["session_id"]), (None, "none"))[0] == wid]
 
 
 def assignment_map(conn: sqlite3.Connection) -> dict[str, tuple[str, str]]:
-    """session_id → (work_item_id, how), independent of insertion order."""
-    out: dict[str, tuple[str, str]] = {}
-    for session in conn.execute("SELECT session_id FROM agent_sessions").fetchall():
-        sid = str(session["session_id"])
-        owner, how = effective_assignment(conn, sid)
-        if owner is not None:
-            out[sid] = (owner, how)
-    return out
+    """Resolve ancestry in memory, with cycle detection and nearest overrides."""
+    parents = {str(s[0]): s[1] for s in conn.execute("SELECT session_id, parent_session_id FROM agent_sessions")}
+    owners: dict[str, str | None] = {str(w[0]): str(w[1]) for w in conn.execute(
+        "SELECT session_id, work_item_id FROM work_item_sessions")}
+    explicit = set(owners)
+    for sid in parents:
+        path: list[str] = []
+        seen: set[str] = set()
+        current: str | None = sid
+        while current is not None and current not in owners and current not in seen:
+            seen.add(current)
+            path.append(current)
+            current = parents.get(current)
+        owner = owners.get(current) if current is not None else None
+        for node in path:
+            owners[node] = owner
+    return {sid: (owner, "explicit" if sid in explicit else "via_parent")
+            for sid, owner in owners.items() if owner is not None and sid in parents}
 
 
 def suggest(conn: sqlite3.Connection, wid: str, *, limit: int = 20) -> list[tuple[sqlite3.Row, list[str]]]:
@@ -341,7 +334,10 @@ class Report:
         t = self.total
         if t.calls == 0:
             return "no model calls recorded"
-        if t.priced_calls == t.calls:
+        if t.priced_calls == t.calls and not any(
+            s.unparseable or s.format_status != "supported" or s.consistency.get("ambiguous_subagent_usage", 0)
+            for s in self.sessions
+        ):
             return "complete"
         return "partial"
 
@@ -450,7 +446,7 @@ def build_report(conn: sqlite3.Connection, wid: str, *, cards: RateCardSet | Non
     return Report(
         item=dict(item), sessions=lines, total=total, by_agent=by_agent, by_model=by_model, timeline=timeline,
         timeline_unit=unit, unpriced_reasons=unpriced_reasons, rate_cards=rate_cards, calc_versions=calc_versions,
-        pinned=pin, subagent_count=sum(1 for ln in lines if ln.parent_session_id),
+        pinned=pin, subagent_count=sum(1 for ln in lines if ln.how == "via_parent"),
         explicit_count=sum(1 for ln in lines if ln.how == "explicit"), first_at=first_at, last_at=last_at,
     )
 
@@ -516,7 +512,7 @@ def render_report(r: Report, *, term: Term | None = None, trace: int = 0, conn: 
             head += f"  [pinned rate card {r.pinned} for its provider; stored estimates untouched]"
         L.append(head)
         if t.priced_calls == t.calls:
-            L.append(f"  all {t.calls} model calls priced · coverage complete")
+            L.append(f"  all {t.calls} model calls priced · coverage {r.coverage}")
         else:
             L.append(f"  {t.priced_calls} of {t.calls} model calls priced · total is a priced subtotal, not the whole"
                      f" ({t.unpriced_calls} unpriced, {t.no_usage_calls} without usage)")
@@ -535,7 +531,7 @@ def render_report(r: Report, *, term: Term | None = None, trace: int = 0, conn: 
         for src, b in sorted(r.by_agent.items(), key=lambda kv: -kv[1].cost_nanos):
             n_s = sum(1 for ln in r.sessions if ln.source == src)
             share = (f"{100 * b.cost_nanos / t.cost_nanos:.1f}%"
-                     if t.cost_nanos and b.priced_calls else "unknown" if b.calls else "—")
+                     if t.cost_nanos and b.priced_calls else "unknown" if b.unpriced_calls or b.no_usage_calls else "—")
             L.append(f"  {_label(src):<14}{n_s:>9}{b.calls:>8}{_cost_cell(b):>14}{share:>8}"
                      f"  {b.unpriced_calls + b.no_usage_calls or ''}")
         L.append("")
@@ -554,7 +550,7 @@ def render_report(r: Report, *, term: Term | None = None, trace: int = 0, conn: 
             b = ln_.bucket
             short = ln_.session_id.split("/")[-1][:12]
             share = (f"{100 * b.cost_nanos / t.cost_nanos:.1f}%"
-                     if t.cost_nanos and b.priced_calls else "unknown" if b.calls else "—")
+                     if t.cost_nanos and b.priced_calls else "unknown" if b.unpriced_calls or b.no_usage_calls else "—")
             notes: list[str] = []
             if ln_.how == "via_parent":
                 notes.append(f"subagent of {str(ln_.parent_session_id).split('/')[-1][:8]}")
@@ -601,6 +597,9 @@ def render_report(r: Report, *, term: Term | None = None, trace: int = 0, conn: 
         L.append(f"  {resets} cumulative-counter resets handled from the per-call block (Codex).")
     if nomodel:
         L.append(f"  {nomodel} usage records carried no model name; they stay unpriced.")
+    ambiguous = sum(ln_.consistency.get("ambiguous_subagent_usage", 0) for ln_ in r.sessions)
+    if ambiguous:
+        L.append(f"  {ambiguous} ambiguous subagent usage snapshots excluded: copied-history boundary unavailable.")
     bad = sum(ln_.unparseable for ln_ in r.sessions)
     if bad:
         L.append(f"  {bad} unparseable record lines skipped.")
@@ -636,7 +635,7 @@ def render_report(r: Report, *, term: Term | None = None, trace: int = 0, conn: 
                 L.append(f"  {str(u['at'] or '')[:19]:<20}{str(u['session_id']).split('/')[-1][:8]:<10}"
                          f"{sanitize(u['model'] or '(none)')[:25]:<26}{u['input_tokens'] or 0:>8}"
                          f"{u['cache_read_tokens'] or 0:>9}{u['output_tokens'] or 0:>7}{cost:>13}  "
-                         f"{sanitize(u['usage_id'])[:40]}"
+                         f"{sanitize(u['usage_id'])}"
                          + (f" / {sanitize(u['request_id'])}" if u["request_id"] else ""))
         L.append("")
 

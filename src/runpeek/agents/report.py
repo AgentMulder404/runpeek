@@ -200,12 +200,17 @@ def render_sessions(conn: sqlite3.Connection, project: str | None, last: int = 2
                 base += f"  {st}" if st else ""
         return base
 
-    for r in parents:
-        L.append(line(r))
-        for c in children.get(str(r["session_id"]), []):
-            L.append(line(c, indent="  └ "))
-    for r in orphans:
-        L.append(line(r) + f"  (subagent of {sanitize(str(r['parent_session_id']))[:8]})")
+    visited: set[str] = set()
+    for root in parents + orphans + shown:
+        stack = [(root, 0)]
+        while stack:
+            row, depth = stack.pop()
+            sid = str(row["session_id"])
+            if sid in visited:
+                continue
+            visited.add(sid)
+            L.append(line(row, indent="  " * min(depth, 4) + ("└ " if depth else "")))
+            stack.extend((child, depth + 1) for child in reversed(children.get(sid, [])))
     L.append("")
     L.append("Review = potential inefficiencies to look at. Work item: set with runpeek work assign <work-item>"
              " <session-id>")

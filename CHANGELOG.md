@@ -3,17 +3,17 @@
 All notable changes to RunPeek are recorded here. The project is pre-release;
 versions below 1.0 may change interfaces between minor versions.
 
-## Unreleased — accounting review fixes
+## 0.3.0a1 — shared accounting private pilot
 
-- Use deterministic source-record hashes for Codex usage without ordinals so
-  separate calls are retained and reimports remain idempotent.
-- Include nested subagents using the nearest explicit ancestor assignment;
-  reports and assignment views agree, including overrides and malformed cycles.
-- Label spending shares as shares of the priced subtotal and display unknown
-  costs explicitly.
-- Existing stores imported with the old memory-address IDs are not repaired
-  automatically. Rebuild affected accounting in a fresh store from the original
-  transcripts; preserve work-item assignments before replacing an old store.
+- Local init/collect/activate/join flows, metadata-only ledger, explicit actual/estimated/
+  allocated cost reconciliation, custom orchestration SDK, bounded queue and zero model-call tracking.
+- Optional TLS receiver with workspace-scoped device credentials, operator-approved pairing,
+  OS credential storage, revocation, input limits, quotas, replay protection and sync backoff.
+- Local and hub export/deletion, replay tombstones and explicit attribution corrections.
+- Repair legacy unstable IDs with backup and preservation of work assignments; fail closed
+  on ambiguous no-ordinal subagent histories. Recursive listings, full trace IDs, correct
+  inherited counts and zero-cost shares. Ancestry is resolved in memory.
+- See docs/UNIFIED.md for setup, recovery and the private-pilot deployment boundary.
 
 ## 0.2.0a1 — 2026-09-10 — work items, Codex, trustworthy cross-agent accounting
 

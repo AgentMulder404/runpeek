@@ -1,0 +1,4 @@
+include CHANGELOG.md SECURITY.md
+recursive-include docs *.md
+include examples/unified_demo.py examples/benchmark_tracking.py
+recursive-include tests *.py *.jsonl

@@ -1,3 +1,8 @@
+> **0.3 private pilot:** Run `runpeek init` for local setup, `runpeek collect` for a shared-work report,
+> and use the metadata-only orchestration SDK for your own agents. Optional self-hosted device sync
+> is available; no hosted service or universal browser-platform integration is configured.
+> See [shared accounting setup and security boundaries](docs/UNIFIED.md).
+
 <div align="center">
 
 # RunPeek
