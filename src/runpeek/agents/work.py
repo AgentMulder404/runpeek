@@ -694,7 +694,8 @@ def render_report(r: Report, *, term: Term | None = None, trace: int = 0, conn: 
         L.append("  No calls priced.")
     if r.calc_versions:
         L.append(f"  Calculation version {', '.join(str(v) for v in sorted(r.calc_versions))}."
-                 " Source-reported cost: not available in agent records.")
+                 + (" Agent-reported cost is the agent's own estimate, not a bill." if r.total.source_reported_calls
+                    else " Source-reported cost: not available in transcript records."))
     L.append("  Every estimate row carries its usage id, request id (when the source has one), rate card and"
              " calculation version: runpeek work show --trace / runpeek export.")
     L.append("")

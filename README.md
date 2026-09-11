@@ -61,6 +61,43 @@ flowchart LR
 
 ---
 
+## Connect your agents (0.4.0a1)
+
+RunPeek can read the **documented telemetry** of Claude Code and Codex instead of
+only their transcript files, and lets the agent itself create and attach tasks
+through MCP. One command sets it up and one command undoes it.
+
+```bash
+runpeek setup            # detect Claude Code / Codex, confirm once, connect, start the local receiver
+runpeek agents status    # "connected" (telemetry points at RunPeek) vs "collecting" (events arrived)
+```
+
+What `setup` changes, all reversible and backed up: the `env` block of
+`~/.claude/settings.json`, a marked block at the end of `~/.codex/config.toml`,
+a `runpeek` MCP server registration, and a macOS launchd agent for the receiver.
+`runpeek agents disconnect claude-code|codex` and `runpeek telemetry
+uninstall-service` restore the previous state. An existing OpenTelemetry
+exporter is never overwritten.
+
+Inside Claude Code, the agent can then call `runpeek_task_create` and
+`runpeek_task_attach` (the current session is identified by the host), and
+`runpeek_task_report` returns a compact report. Codex sessions are attached
+by thread id (`runpeek work assign`). A ChatGPT or Claude web conversation
+joins a task by URL as an **unmetered participant**: no token usage exists
+for it, and the report says so.
+
+The report headline is **Accounted cost for this task**, split into billed
+charges, provisional usage from measured tokens (using the agent's own cost
+figure when it exports one), explicit allocations, unmetered participants and
+unassigned nearby spend. Where telemetry and a transcript describe the same
+Claude Code request they are merged by request id; Codex transcript rows are
+quarantined when telemetry has observed the session, never matched by timing.
+
+Everything verified with real sessions is in [`docs/EVIDENCE_MATRIX.md`](docs/EVIDENCE_MATRIX.md);
+what is not verified (Gemini CLI, browser token usage, remote connectors) is listed there too.
+
+---
+
 ## Five-minute setup
 
 ```bash
