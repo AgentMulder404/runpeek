@@ -268,6 +268,8 @@ class Bucket:
     priced_calls: int = 0
     unpriced_calls: int = 0
     no_usage_calls: int = 0
+    quarantined_calls: int = 0  # evidence kept, excluded: another observer is authoritative for the request
+    source_reported_calls: int = 0  # priced from the agent's own cost figure rather than a rate card
     cost_nanos: int = 0
     input_tokens: int = 0
     cache_read_tokens: int = 0
@@ -277,9 +279,15 @@ class Bucket:
 
     def add(self, u: sqlite3.Row, amount: int | None, status: str) -> None:
         self.calls += 1
+        if status == "quarantined":
+            self.quarantined_calls += 1
+            return  # tokens of quarantined rows are not summed either: they duplicate telemetry rows
         if status == "priced" and amount is not None:
             self.priced_calls += 1
             self.cost_nanos += amount
+            if _row_get(u, "source_cost_nanos") is not None and _row_get(u, "provenance") in (
+                    "telemetry", "transcript+telemetry"):
+                self.source_reported_calls += 1
         elif status == "no_usage":
             self.no_usage_calls += 1
         else:
@@ -289,6 +297,13 @@ class Bucket:
         self.cache_write_tokens += (u["cache_write_5m_tokens"] or 0) + (u["cache_write_1h_tokens"] or 0)
         self.output_tokens += u["output_tokens"] or 0
         self.reasoning_tokens += u["reasoning_tokens"] or 0
+
+
+def _row_get(row: sqlite3.Row, key: str) -> Any:
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return None
 
 
 @dataclass
@@ -328,6 +343,11 @@ class Report:
     explicit_count: int
     first_at: str | None
     last_at: str | None
+    participants: list[dict[str, Any]] = field(default_factory=list)  # unmetered browser conversations etc.
+    billed_nanos: int = 0  # ledger 'actual' charges attributed to this item
+    allocated_nanos: int = 0  # ledger 'allocated' amounts for this item
+    ledger_estimated_nanos: int = 0  # SDK/orchestrator estimates in the ledger (not from agent sessions)
+    unassigned_nearby: tuple[int, int] = (0, 0)  # (sessions, priced nanos) in the same project, not on any item
 
     @property
     def coverage(self) -> str:
@@ -405,6 +425,10 @@ def build_report(conn: sqlite3.Connection, wid: str, *, cards: RateCardSet | Non
             else:
                 amount, status = u["api_equiv_nanos"], str(u["api_equiv_status"])
                 card_key = (str(u["rate_card_id"] or "(none)"), str(u["rate_resolution"] or "none"))
+                if status != "quarantined" and _row_get(u, "source_cost_nanos") is not None and _row_get(
+                        u, "provenance") in ("telemetry", "transcript+telemetry"):
+                    amount, status = int(u["source_cost_nanos"]), "priced"
+                    card_key = ("agent-reported cost", "telemetry")
             all_usage.append((u, amount, status, line.source))
             line.bucket.add(u, amount, status)
             total.add(u, amount, status)
@@ -443,11 +467,36 @@ def build_report(conn: sqlite3.Connection, wid: str, *, cards: RateCardSet | Non
             label = f"{loc:%Y-%m-%d %H:00}" if unit == "hour" else f"{loc:%Y-%m-%d}"
         per_time.setdefault(label, Bucket()).add(u, amount, status)
     timeline = sorted(per_time.items())
+    participants = [dict(r) for r in conn.execute(
+        "SELECT participant_id, platform, label, metering, attached_at FROM work_item_participants"
+        " WHERE work_item_id = ? ORDER BY attached_at", (wid,))]
+    billed = allocated = ledger_est = 0
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'ledger_observations'").fetchone():
+        from .. import ledger as _ledger
+
+        lr = _ledger.report(conn, "local", wid)
+        by = lr.get("by_basis_nanos") or {}
+        billed, allocated = int(by.get("actual") or 0), int(by.get("allocated") or 0)
+        ledger_est = int(by.get("estimated") or 0)
+    counted = {ln.session_id for ln in lines}
+    assigned_all = assignment_map(conn)
+    nearby_n = nearby_cost = 0
+    if item["repository"]:
+        for srow in conn.execute("SELECT session_id FROM agent_sessions WHERE project_path = ? AND parent_session_id"
+                                 " IS NULL", (str(item["repository"]).rstrip("/"),)):
+            sid_ = str(srow["session_id"])
+            if sid_ in counted or sid_ in assigned_all:
+                continue
+            nearby_n += 1
+            nearby_cost += int(conn.execute("SELECT COALESCE(SUM(api_equiv_nanos),0) FROM agent_usage WHERE"
+                                            " session_id = ? AND api_equiv_status = 'priced'", (sid_,)).fetchone()[0])
     return Report(
         item=dict(item), sessions=lines, total=total, by_agent=by_agent, by_model=by_model, timeline=timeline,
         timeline_unit=unit, unpriced_reasons=unpriced_reasons, rate_cards=rate_cards, calc_versions=calc_versions,
         pinned=pin, subagent_count=sum(1 for ln in lines if ln.how == "via_parent"),
         explicit_count=sum(1 for ln in lines if ln.how == "explicit"), first_at=first_at, last_at=last_at,
+        participants=participants, billed_nanos=billed, allocated_nanos=allocated,
+        ledger_estimated_nanos=ledger_est, unassigned_nearby=(nearby_n, nearby_cost),
     )
 
 
@@ -502,8 +551,24 @@ def render_report(r: Report, *, term: Term | None = None, trace: int = 0, conn: 
                 " · no model usage recorded yet"))
     L.append("")
 
-    # ---- headline
-    L.append(term.bold("ESTIMATED MODEL COST"))
+    # ---- headline: the four categories are non-overlapping by construction (different sources)
+    provisional = t.cost_nanos + r.ledger_estimated_nanos
+    accounted = r.billed_nanos + provisional + r.allocated_nanos
+    L.append(term.bold("ACCOUNTED COST FOR THIS TASK"))
+    L.append(f"  {ui.usd_exact(accounted)}  attributed so far"
+             + ("  (nothing measured yet)" if accounted == 0 and t.calls == 0 else ""))
+    L.append(f"    billed charges      {ui.usd_exact(r.billed_nanos):>14}   matched actual charges (imports / SDK)")
+    L.append(f"    provisional usage   {ui.usd_exact(provisional):>14}   from measured tokens where no charge exists")
+    L.append(f"    allocated           {ui.usd_exact(r.allocated_nanos):>14}   explicit subscription / infrastructure"
+             " allocations")
+    unmet = len(r.participants)
+    L.append(f"    unmetered           {unmet:>14}   participant{'s' if unmet != 1 else ''} without measured usage")
+    n_near, c_near = r.unassigned_nearby
+    if n_near:
+        L.append(f"    unassigned nearby   {ui.usd_exact(c_near):>14}   {n_near} session{'s' if n_near != 1 else ''}"
+                 " in this repository on no task")
+    L.append("")
+    L.append(term.bold("PROVISIONAL MODEL USAGE"))
     if t.calls == 0:
         L.append("  No model calls recorded for the assigned sessions.")
     else:
@@ -511,11 +576,17 @@ def render_report(r: Report, *, term: Term | None = None, trace: int = 0, conn: 
         if r.pinned:
             head += f"  [pinned rate card {r.pinned} for its provider; stored estimates untouched]"
         L.append(head)
-        if t.priced_calls == t.calls:
-            L.append(f"  all {t.calls} model calls priced · coverage {r.coverage}")
+        measured = t.calls - t.quarantined_calls
+        if t.priced_calls == measured:
+            L.append(f"  all {measured} model calls priced · coverage {r.coverage}"
+                     + (f" · {t.source_reported_calls} priced from the agent's own cost figure"
+                        if t.source_reported_calls else ""))
         else:
-            L.append(f"  {t.priced_calls} of {t.calls} model calls priced · total is a priced subtotal, not the whole"
+            L.append(f"  {t.priced_calls} of {measured} model calls priced · total is a priced subtotal, not the whole"
                      f" ({t.unpriced_calls} unpriced, {t.no_usage_calls} without usage)")
+        if t.quarantined_calls:
+            L.append(f"  {t.quarantined_calls} transcript calls quarantined: telemetry is authoritative for those"
+                     " sessions (evidence kept, not counted)")
         L.append(f"  tokens: input {t.input_tokens:,} · cache read {t.cache_read_tokens:,}"
                  f" · cache write {t.cache_write_tokens:,} · output {t.output_tokens:,}"
                  + (f" (reasoning {t.reasoning_tokens:,})" if t.reasoning_tokens else ""))
@@ -571,13 +642,21 @@ def render_report(r: Report, *, term: Term | None = None, trace: int = 0, conn: 
             L.append(f"  {label:<18}{b.calls:>6} calls {_cost_cell(b):>14}  {bar}")
         L.append("")
 
+    if r.participants:
+        L.append(term.bold("PARTICIPANTS WITHOUT MEASURED USAGE"))
+        for p in r.participants:
+            L.append(f"  {p['participant_id']}  {p['platform']:<12}{sanitize(p['label'] or '(no label)')[:40]:<42}"
+                     f" attached {ui.when(p['attached_at'], now)} · {p['metering']}")
+        L.append("  These surfaces expose no token accounting; their cost is unknown, not zero.")
+        L.append("")
+
     # ---- coverage and trust
     L.append(term.bold("ACCOUNTING COVERAGE"))
     L.append(f"  Sessions: {len(r.sessions)} counted · {r.explicit_count} assigned explicitly"
              + (f" · {r.subagent_count} subagents via parent" if r.subagent_count else ""))
     if t.calls:
         L.append(f"  Model calls: {t.priced_calls} priced · {t.unpriced_calls} unpriced · {t.no_usage_calls} without"
-                 f" usage → coverage {r.coverage}")
+                 f" usage · {t.quarantined_calls} quarantined → coverage {r.coverage}")
     for reason, n in sorted(r.unpriced_reasons.items(), key=lambda kv: -kv[1]):
         L.append(f"    {n} × {sanitize(reason)}")
     unk = [ln_ for ln_ in r.sessions if ln_.format_status != "supported"]
@@ -685,4 +764,39 @@ def render_suggestions(conn: sqlite3.Connection, wid: str, *, term: Term | None 
     for r, why in rows:
         L.append(f"  {ui.when(r['first_event_at'] or r['first_seen_at'], now):<18}"
                  f"{str(r['session_id'])[:12]:<14}{_label(str(r['source']))[:11]:<12}  {', '.join(why)}")
+    return "\n".join(L)
+
+
+def render_compact(r: Report, conn: sqlite3.Connection | None = None) -> str:
+    """A short report for chat surfaces: the four categories, top contributors, gaps. Under 30 lines."""
+    it, t = r.item, r.total
+    provisional = t.cost_nanos + r.ledger_estimated_nanos
+    accounted = r.billed_nanos + provisional + r.allocated_nanos
+    L = [f"{it['work_item_id']} · {sanitize(it['name'])} · {it['kind']} · {outcome_line(it)}",
+         f"Accounted so far: {ui.usd_exact(accounted)} = billed {ui.usd_exact(r.billed_nanos)} + provisional"
+         f" {ui.usd_exact(provisional)} + allocated {ui.usd_exact(r.allocated_nanos)}"]
+    if t.calls:
+        measured = t.calls - t.quarantined_calls
+        L.append(f"Model calls: {t.priced_calls}/{measured} priced" + (
+            f", {t.unpriced_calls} unpriced" if t.unpriced_calls else "") + (
+            f", {t.quarantined_calls} quarantined (telemetry authoritative)" if t.quarantined_calls else ""))
+        for src, b in sorted(r.by_agent.items(), key=lambda kv: -kv[1].cost_nanos)[:4]:
+            L.append(f"  {_label(src)}: {b.calls} calls, {_cost_cell(b)}")
+        for (src, model), b in sorted(r.by_model.items(), key=lambda kv: -kv[1].cost_nanos)[:4]:
+            L.append(f"  {sanitize(model)[:40]} ({_label(src)}): {_cost_cell(b)}")
+        top = sorted(r.sessions, key=lambda x: -x.bucket.cost_nanos)[:3]
+        L.append("Top sessions: " + "; ".join(
+            f"{ln.session_id.split('/')[-1][:8]} {_cost_cell(ln.bucket)}" for ln in top))
+    else:
+        L.append("No model usage collected for the attached sessions yet.")
+    if r.participants:
+        L.append(f"Unmetered participants: {len(r.participants)} (" + ", ".join(
+            f"{p['platform']}" for p in r.participants[:4]) + ") — cost unknown, not zero")
+    n_near, c_near = r.unassigned_nearby
+    if n_near:
+        L.append(f"Unassigned nearby: {n_near} sessions in this repository on no task ({ui.usd_exact(c_near)})")
+    for reason, n in sorted(r.unpriced_reasons.items(), key=lambda kv: -kv[1])[:3]:
+        L.append(f"Gap: {n} × {sanitize(reason)}")
+    L.append("Model usage only, API-equivalent list prices unless billed; not infrastructure. Full report:"
+             f" runpeek work show {it['work_item_id']}")
     return "\n".join(L)

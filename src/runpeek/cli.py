@@ -130,7 +130,15 @@ def resolve_db(explicit: str | None) -> tuple[Path, str | None]:
     if not DEFAULT_DB.exists() and LEGACY_DB.exists():
         return LEGACY_DB, (f"using legacy store {LEGACY_DB} — move it to {DEFAULT_DB} to silence this"
                            " (docs/MIGRATION.md)")
-    return DEFAULT_DB, None
+    if DEFAULT_DB.exists():
+        return DEFAULT_DB, None
+    return user_db(), None
+
+
+def user_db() -> Path:
+    """The user-level store shared by the telemetry receiver, the MCP server and the CLI."""
+    home = os.environ.get("RUNPEEK_HOME")
+    return (Path(home) if home else Path.home() / ".runpeek") / "runpeek.db"
 
 
 def _db(args: argparse.Namespace) -> Path:
@@ -181,7 +189,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     cmd: list[str] = [c for c in args.cmd if c != "--"] if args.cmd else []
     if not cmd:
         sys.exit("runpeek run: give a command, e.g. `runpeek run python app.py`")
-    db = _db(args)
+    db = Path(args.db) if args.db else (Path(os.environ["RUNPEEK_DB"]) if os.environ.get("RUNPEEK_DB") else DEFAULT_DB)
     run_id = new_id("run")
     env = dict(os.environ)
     env["RUNPEEK_ENABLED"] = "1"
@@ -543,6 +551,148 @@ def cmd_work_suggest(args: argparse.Namespace) -> int:
     return 0
 
 
+# ----------------------------------------------------------------------------- agents, telemetry, mcp, setup
+
+
+def cmd_agents(args: argparse.Namespace) -> int:
+    from . import connectors, telemetry
+
+    conn = _open_or_create(args)
+    if args.agents_command == "status":
+        print(connectors.render_status(connectors.detect(conn), telemetry.receiver_alive(conn)))
+        return 0
+    port = args.port or telemetry.receiver_port(conn)
+    try:
+        if args.agents_command == "connect":
+            token = telemetry.ensure_token(conn)
+            telemetry.set_receiver_port(conn, port)
+            result = connectors.connect(conn, args.agent, token, port=port)
+        else:
+            result = connectors.disconnect(conn, args.agent)
+    except connectors.ConnectorError as exc:
+        sys.exit(f"runpeek agents: {exc}")
+    for k, v in result.items():
+        if v is not None:
+            print(f"{args.agent}: {k}: {v}")
+    if args.agents_command == "connect" and not telemetry.receiver_alive(conn):
+        print("Receiver is not running. Start it: runpeek telemetry serve   (or: runpeek setup)")
+    return 0
+
+
+def cmd_telemetry(args: argparse.Namespace) -> int:
+    from . import connectors, telemetry
+
+    conn = _open_or_create(args)
+    db = _db(args)
+    if args.telemetry_command == "serve":
+        port = args.port or telemetry.receiver_port(conn)
+        conn.close()
+        print(f"RunPeek telemetry receiver on 127.0.0.1:{port} (loopback, bearer-authenticated). Ctrl-C stops.",
+              flush=True)
+        telemetry.serve(db, port=port)
+        return 0
+    if args.telemetry_command == "status":
+        alive = telemetry.receiver_alive(conn)
+        print(f"receiver: {'running' if alive else 'not running'} on port {telemetry.receiver_port(conn)}")
+        n = conn.execute("SELECT COUNT(*) FROM agent_usage WHERE provenance IN ('telemetry','transcript+telemetry')"
+                         ).fetchone()[0]
+        last = conn.execute("SELECT MAX(telemetry_at) FROM agent_usage").fetchone()[0]
+        print(f"usage rows from telemetry: {n} · last received: {last or 'never'}")
+        return 0
+    if args.telemetry_command == "install-service":
+        port = args.port or telemetry.receiver_port(conn)
+        telemetry.set_receiver_port(conn, port)
+        try:
+            print("service installed: " + telemetry.install_service(connectors.runpeek_command(), db, port))
+        except RuntimeError as exc:
+            sys.exit(f"runpeek telemetry: {exc}")
+        return 0
+    if args.telemetry_command == "uninstall-service":
+        print("service: " + telemetry.uninstall_service())
+        return 0
+    return 0
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    from .mcp_server import main as mcp_main
+
+    return mcp_main()
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    """The fresh-user path: detect, confirm, connect, start collecting, first report."""
+    from . import connectors, telemetry
+    from .agents.ingest import ADAPTERS, Ingestor
+
+    conn = _open_or_create(args)
+    statuses = connectors.detect(conn)
+    print("RunPeek setup — local only. Nothing leaves this machine.\n")
+    print(connectors.render_status(statuses, telemetry.receiver_alive(conn)))
+    print()
+    print("Collected: model names, token counts, agent-reported cost, session/request ids, tool names, relative"
+          " paths.\nNever collected: prompts, responses, tool arguments, emails, account ids, secrets.")
+    targets = [s for s in statuses if s.installed and s.telemetry in ("not configured", "runpeek")
+               and s.source in ("claude-code", "codex")]
+    if not targets:
+        print("\nNo supported agent found to connect. Claude Code and Codex are supported;"
+              " see docs/EVIDENCE_MATRIX.md.")
+        return 0
+    names = ", ".join(t.label for t in targets)
+    if not args.yes:
+        if not sys.stdin.isatty():
+            sys.exit(f"runpeek setup: would connect {names}; re-run with --yes to confirm non-interactively")
+        if input(f"Connect {names} to RunPeek and start collecting? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("Nothing changed.")
+            return 0
+    token = telemetry.ensure_token(conn)
+    port = args.port or telemetry.receiver_port(conn)
+    telemetry.set_receiver_port(conn, port)
+    for t in targets:
+        try:
+            result = connectors.connect(conn, t.source, token, port=port)
+            print(f"{t.label}: telemetry {result.get('telemetry')}, MCP {result.get('mcp')}"
+                  + (f" (backup {result['backup']})" if result.get("backup") else ""))
+            if result.get("note"):
+                print(f"  {result['note']}")
+        except connectors.ConnectorError as exc:
+            print(f"{t.label}: not connected — {exc}")
+    if not telemetry.receiver_alive(conn):
+        if args.no_service:
+            print("Receiver not started (--no-service). Run: runpeek telemetry serve")
+        else:
+            try:
+                svc = telemetry.install_service(connectors.runpeek_command(), _db(args), port)
+                print("Background receiver: " + svc)
+            except RuntimeError as exc:
+                print(f"Background receiver not installed ({exc}). Run: runpeek telemetry serve")
+    if not args.no_import:
+        ing = Ingestor(conn)
+        n = 0
+        for adapter in ADAPTERS.values():
+            for tf in adapter.discover(None, all_projects=True):
+                ing.ingest(tf)
+                n += 1
+        print(f"Imported existing records from {n} session files (backfill).")
+    print()
+    print(connectors.render_status(connectors.detect(conn), telemetry.receiver_alive(conn)))
+    print("\nNext: in your agent, ask it to create a task with the RunPeek tools, or run:")
+    print('  runpeek work new "Build login" --kind feature && runpeek sessions --unassigned')
+    print("Undo everything: runpeek agents disconnect claude-code; runpeek agents disconnect codex;"
+          " runpeek telemetry uninstall-service")
+    return 0
+
+
+def cmd_work_attach_conversation(args: argparse.Namespace) -> int:
+    from .mcp_server import ToolError, task_attach_conversation
+
+    conn = _open(args)
+    try:
+        print(task_attach_conversation(conn, args.work_item, args.url, args.label or ""))
+    except ToolError as exc:
+        sys.exit(f"runpeek work attach-conversation: {exc}")
+    return 0
+
+
 # ----------------------------------------------------------------------------- parser
 
 
@@ -629,6 +779,43 @@ def build_parser() -> argparse.ArgumentParser:
     common(wsu, perspective=False)
     wsu.add_argument("work_item")
     wsu.set_defaults(fn=cmd_work_suggest)
+
+    wac = wsub.add_parser("attach-conversation", help="attach a ChatGPT or Claude web conversation (unmetered)")
+    common(wac, perspective=False)
+    wac.add_argument("work_item")
+    wac.add_argument("url")
+    wac.add_argument("--label")
+    wac.set_defaults(fn=cmd_work_attach_conversation)
+
+    st = sub.add_parser("setup", help="detect local agents, connect their documented telemetry, first report")
+    common(st, perspective=False)
+    st.add_argument("--yes", action="store_true", help="confirm without prompting")
+    st.add_argument("--port", type=int)
+    st.add_argument("--no-service", action="store_true", help="do not install the background receiver")
+    st.add_argument("--no-import", action="store_true", help="skip backfill of existing session records")
+    st.set_defaults(fn=cmd_setup)
+
+    ag = sub.add_parser("agents", help="connect / disconnect local agents; show collection health")
+    agsub = ag.add_subparsers(dest="agents_command", required=True)
+    for name in ("status", "connect", "disconnect"):
+        sp_ = agsub.add_parser(name)
+        common(sp_, perspective=False)
+        if name != "status":
+            sp_.add_argument("agent", choices=["claude-code", "codex", "gemini-cli"])
+            sp_.add_argument("--port", type=int)
+        sp_.set_defaults(fn=cmd_agents)
+
+    tl = sub.add_parser("telemetry", help="local OpenTelemetry receiver for agent usage events")
+    tlsub = tl.add_subparsers(dest="telemetry_command", required=True)
+    for name in ("serve", "status", "install-service", "uninstall-service"):
+        sp_ = tlsub.add_parser(name)
+        common(sp_, perspective=False)
+        sp_.add_argument("--port", type=int)
+        sp_.set_defaults(fn=cmd_telemetry)
+
+    mc = sub.add_parser("mcp", help="run the RunPeek MCP server over stdio (used by agents)")
+    common(mc, perspective=False)
+    mc.set_defaults(fn=cmd_mcp)
 
     r = sub.add_parser("run", help="run a command with the harness attached, then print its summary")
     common(r, perspective=False)

@@ -198,7 +198,8 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   repository_url      TEXT,
   usage_duplicates    INTEGER NOT NULL DEFAULT 0, -- usage records already counted under another session
   duplicate_of_session_id TEXT,                  -- the session that owns those records (resumed/forked copy)
-  usage_consistency   TEXT                       -- JSON counters from the adapter (stale repeats, resets, ...)
+  usage_consistency   TEXT,                      -- JSON counters from the adapter (stale repeats, resets, ...)
+  telemetry_last_at   TEXT                       -- last documented-telemetry event for this session (collection health)
 );
 
 CREATE TABLE IF NOT EXISTS agent_turns (
@@ -252,7 +253,9 @@ CREATE TABLE IF NOT EXISTS agent_usage (
   calc_version          INTEGER,
   provider              TEXT,                    -- anthropic | openai
   reasoning_tokens      INTEGER,                 -- part of output_tokens (informational)
-  ordinal               INTEGER                  -- position of the source record, for tracing
+  ordinal               INTEGER,                 -- position of the source record, for tracing
+  telemetry_at          TEXT,                    -- when the documented telemetry observation arrived
+  quarantine_reason     TEXT                     -- set when api_equiv_status = 'quarantined'
 );
 CREATE INDEX IF NOT EXISTS ix_agent_usage_session ON agent_usage (session_id);
 
@@ -337,3 +340,18 @@ CREATE TABLE IF NOT EXISTS work_item_events (
   detail       TEXT                              -- JSON
 );
 CREATE INDEX IF NOT EXISTS ix_work_item_events_item ON work_item_events (work_item_id);
+
+-- Participants without measured usage: browser conversations and other surfaces
+-- that take part in a task but expose no token accounting. Identity is a keyed
+-- hash of the platform's own conversation id; the id itself is never stored.
+CREATE TABLE IF NOT EXISTS work_item_participants (
+  participant_id  TEXT PRIMARY KEY,              -- pt-<hex>
+  work_item_id    TEXT NOT NULL,
+  platform        TEXT NOT NULL,                 -- chatgpt | claude-web | other
+  conversation_fp TEXT NOT NULL,                 -- keyed HMAC of the conversation id
+  label           TEXT,                          -- user-supplied, optional
+  metering        TEXT NOT NULL DEFAULT 'unmetered',
+  attached_at     TEXT NOT NULL,
+  UNIQUE (platform, conversation_fp)
+);
+CREATE INDEX IF NOT EXISTS ix_participants_item ON work_item_participants (work_item_id);

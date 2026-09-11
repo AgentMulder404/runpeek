@@ -30,7 +30,8 @@ def test_legacy_store_is_used_in_place_not_recreated(tmp_path: Path, monkeypatch
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("RUNPEEK_DB", raising=False)
     monkeypatch.delenv("NEMULAI_DB", raising=False)
-    assert resolve_db(None) == (DEFAULT_DB, None)  # nothing exists yet → new default
+    monkeypatch.setenv("RUNPEEK_HOME", str(tmp_path / "home"))
+    assert resolve_db(None) == (tmp_path / "home" / "runpeek.db", None)  # nothing exists yet → user-level store
     LEGACY_DB.parent.mkdir()
     LEGACY_DB.write_bytes(b"")
     path, note = resolve_db(None)

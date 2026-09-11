@@ -296,7 +296,7 @@ def test_first_run_cli_and_pause_resume(tmp_path, monkeypatch, capsys):
     rollout.usage(100, 0, 2)
     db = str(tmp_path / "onboard.db")
     assert main(["init", "--project", CWD, "--name", "First task", "--yes", "--db", db]) == 0
-    assert "ESTIMATED MODEL COST" in capsys.readouterr().out
+    assert "ACCOUNTED COST FOR THIS TASK" in capsys.readouterr().out
     assert main(["collect", "--db", db]) == 0
     assert "ACCOUNTED COST" in capsys.readouterr().out
     assert main(["pause", "--db", db]) == 0

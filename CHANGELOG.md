@@ -3,6 +3,38 @@
 All notable changes to RunPeek are recorded here. The project is pre-release;
 versions below 1.0 may change interfaces between minor versions.
 
+## 0.4.0a1 — 2026-09-11 — documented telemetry, MCP tasks, browser participants, setup
+
+Phase 0 and the first Phase 1 slice of `docs/CROSS_PLATFORM_ENGINEERING_PLAN.md`.
+Evidence for every claim is in `docs/EVIDENCE_MATRIX.md`.
+
+- **Telemetry receiver** (`runpeek telemetry serve`, `install-service`): a loopback,
+  bearer-authenticated OTLP/HTTP JSON receiver for Claude Code and Codex log events.
+  Allowlists model, tokens, agent-reported cost, request/session ids; drops emails,
+  account and organisation ids; accepts and discards metrics/traces. Verified with real
+  Claude Code 2.1.269 and Codex CLI 0.154.0 sessions; sanitised payloads are fixtures.
+- **Overlap rules**: Claude Code telemetry and transcript rows merge on `request_id`
+  (one row, both observers recorded). Codex telemetry carries no request id, so
+  transcript rows of a telemetry-observed session are quarantined (kept, not counted,
+  shown in coverage) instead of matched by timing.
+- **Connectors** (`runpeek agents connect|disconnect|status`): reversible changes to
+  `~/.claude/settings.json` (env block, backed up, previous values restored) and
+  `~/.codex/config.toml` (marked block). Existing exporters are never overwritten.
+  "Connected" and "collecting" are reported separately. Gemini CLI is detected only.
+- **MCP server** (`runpeek mcp`, official `mcp` SDK v2): six compact tools — create/list
+  tasks, attach the current session (Claude Code provides `CLAUDE_CODE_SESSION_ID` to
+  spawned servers; Codex provides nothing, so attach by id), attach a ChatGPT/Claude web
+  conversation by URL as an unmetered participant, compact report, collection health.
+- **Report**: headline "Accounted cost for this task" split into billed (ledger actual),
+  provisional (measured usage; the agent's own cost figure when exported), allocated
+  (explicit), unmetered participants and unassigned nearby spend. Quarantined calls shown.
+- **Setup** (`runpeek setup`): detect agents, confirm once, connect, install the macOS
+  launchd receiver, backfill, print collection status. Undo with `agents disconnect` and
+  `telemetry uninstall-service`.
+- Store default falls back to `~/.runpeek/runpeek.db` (`RUNPEEK_HOME`) when no
+  per-project store exists, so the receiver, MCP server and CLI share one ledger.
+- `probes/`: the throwaway scripts used for Phase 0.
+
 ## 0.3.0a1 — shared accounting private pilot
 
 - Local init/collect/activate/join flows, metadata-only ledger, explicit actual/estimated/

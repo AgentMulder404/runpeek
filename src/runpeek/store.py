@@ -84,9 +84,12 @@ def apply_schema(conn: sqlite3.Connection) -> None:
         if name not in scols:
             conn.execute(f"ALTER TABLE agent_sessions ADD COLUMN {name} {decl}")
     ucols = {r[1] for r in conn.execute("PRAGMA table_info(agent_usage)")}
-    for name, decl in (("provider", "TEXT"), ("reasoning_tokens", "INTEGER"), ("ordinal", "INTEGER")):
+    for name, decl in (("provider", "TEXT"), ("reasoning_tokens", "INTEGER"), ("ordinal", "INTEGER"),
+                       ("telemetry_at", "TEXT"), ("quarantine_reason", "TEXT")):
         if name not in ucols:
             conn.execute(f"ALTER TABLE agent_usage ADD COLUMN {name} {decl}")
+    if "telemetry_last_at" not in scols:
+        conn.execute("ALTER TABLE agent_sessions ADD COLUMN telemetry_last_at TEXT")
 
 
 def _j(obj: Any) -> str | None:

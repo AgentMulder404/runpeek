@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "runpeek"
-version = "0.3.0a1"
+version = "0.4.0a1"
 description = "RunPeek by NemulAI — see where your AI spends time and tokens. Local-first observability for supported AI applications and Claude Code sessions."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,8 +28,11 @@ dependencies = []
 
 [project.optional-dependencies]
 sync = ["keyring>=25,<26"]
+mcp = ["mcp>=2,<3"]
+installer = ["mcp>=2,<3", "pyinstaller>=6.10,<7"]
 dev = [
   "pytest>=8",
+  "mcp>=2,<3",
   "openai==2.44.0",
   "httpx>=0.28",
   "ruff>=0.6",

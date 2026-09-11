@@ -82,6 +82,8 @@ class IngestStats:
     unknown_version_sessions: list[str] = field(default_factory=list)
     oversized_lines: int = 0
     duplicate_usage: int = 0  # usage records already counted under another session
+    merged_with_telemetry: int = 0  # transcript requests already recorded by documented telemetry
+    quarantined: int = 0  # transcript rows excluded because telemetry is authoritative for the session
 
 
 def fingerprint_key(conn: sqlite3.Connection) -> bytes:
@@ -249,6 +251,12 @@ class Ingestor:
             (tf.session_id, tf.source, tf.project_path, str(tf.path), tf.parent_session_id,
              1 if tf.is_subagent else 0, now_iso(), ADAPTERS[tf.source].PROVIDER),
         )
+        # A session first seen through telemetry has no transcript path yet.
+        self.conn.execute(
+            "UPDATE agent_sessions SET transcript_path = ?, project_path = COALESCE(project_path, ?),"
+            " parent_session_id = COALESCE(parent_session_id, ?), is_subagent = ?"
+            " WHERE session_id = ? AND transcript_path LIKE 'telemetry://%'",
+            (str(tf.path), tf.project_path, tf.parent_session_id, 1 if tf.is_subagent else 0, tf.session_id))
         if tf.session_id not in self._seq:
             row = self.conn.execute(
                 "SELECT COALESCE(MAX(sequence), 0) FROM agent_actions WHERE session_id = ?", (tf.session_id,)
@@ -360,6 +368,17 @@ class Ingestor:
         self._emit("activity", tf, {"at": at})
 
     def _usage(self, sid: str, parser: Any, ev: UsageEvent, stats: IngestStats) -> bool:
+        if ev.request_id:
+            # Documented telemetry may already have recorded this request (Claude Code exports request_id).
+            # Keep one row per request and mark it as seen by both observers.
+            tele = self.conn.execute(
+                "SELECT usage_id FROM agent_usage WHERE session_id = ? AND request_id = ? AND provenance = 'telemetry'",
+                (sid, ev.request_id)).fetchone()
+            if tele is not None:
+                self.conn.execute("UPDATE agent_usage SET provenance = 'transcript+telemetry',"
+                                  " ordinal = COALESCE(ordinal, ?) WHERE usage_id = ?", (ev.ordinal, tele["usage_id"]))
+                stats.merged_with_telemetry += 1
+                return True
         owner = self.conn.execute("SELECT session_id FROM agent_usage WHERE usage_id = ?", (ev.usage_id,)).fetchone()
         if owner is not None:
             if owner["session_id"] != sid:
@@ -408,6 +427,14 @@ class Ingestor:
         )
         if cur.rowcount > 0:
             stats.usage += 1
+            if ev.provider == "openai" and self.conn.execute(
+                "SELECT 1 FROM agent_usage WHERE session_id = ? AND provenance IN ('telemetry', 'transcript+telemetry')"
+                " LIMIT 1", (sid,)).fetchone():
+                # Codex telemetry carries no request identity. Telemetry is authoritative for a session it has
+                # observed; the transcript row is kept as evidence but quarantined from priced subtotals.
+                self.conn.execute("UPDATE agent_usage SET api_equiv_status = 'quarantined',"
+                                  " quarantine_reason = 'telemetry_authoritative' WHERE usage_id = ?", (ev.usage_id,))
+                stats.quarantined += 1
             if parser.current_turn:
                 self.conn.execute(
                     "UPDATE agent_turns SET assistant_messages = assistant_messages + 1 WHERE turn_id = ?",

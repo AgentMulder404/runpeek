@@ -264,7 +264,7 @@ def test_cli_work_flow(tmp_path: Path, homes: tuple[Path, Path]) -> None:
     assert sh.returncode == 0, sh.stderr
     out = sh.stdout
     assert "WORK ITEM " + wid in out and "Outcome: completed" in out and "issue #42" in out
-    assert "ESTIMATED MODEL COST" in out and "all 5 model calls priced" in out
+    assert "ACCOUNTED COST FOR THIS TASK" in out and "all 5 model calls priced" in out
     assert "BY AGENT" in out and "BY MODEL" in out and "BY SESSION" in out and "TIMELINE" in out
     assert "ACCOUNTING COVERAGE" in out and "PRICING PROVENANCE" in out and "SOURCE EVENTS" in out
     for sentinel in CC_SENTINELS + CX_SENTINELS:
