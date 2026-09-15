@@ -266,8 +266,11 @@ def _claude_mcp(action: str) -> str:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return f"failed: {type(exc).__name__}"
-    if r.returncode != 0 and action == "remove" and "not found" in (r.stdout + r.stderr).lower():
+    combined = (r.stdout + r.stderr).lower()
+    if r.returncode != 0 and action == "remove" and "not found" in combined:
         return "not registered"
+    if r.returncode != 0 and action == "add" and "already exists" in combined:
+        return "registered"  # an earlier connect registered it; reconnect is idempotent
     return "registered" if action == "add" and r.returncode == 0 else (
         "removed" if r.returncode == 0 else f"failed: {(r.stderr or r.stdout).strip()[:200]}")
 
