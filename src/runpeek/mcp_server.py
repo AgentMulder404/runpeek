@@ -58,10 +58,9 @@ def _ident(value: Any, what: str) -> str:
 
 
 def db_path() -> Path:
-    from .cli import resolve_db
+    from .cli import resolve_user_db
 
-    path, _ = resolve_db(os.environ.get("RUNPEEK_DB"))
-    return path
+    return resolve_user_db(None)
 
 
 def open_db(path: Path | None = None) -> sqlite3.Connection:

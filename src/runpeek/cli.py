@@ -122,23 +122,33 @@ def resolve_db(explicit: str | None) -> tuple[Path, str | None]:
     collected before the rename stays visible. See docs/MIGRATION.md.
     """
     if explicit:
-        return Path(explicit), None
+        return Path(explicit).resolve(), None
     if os.environ.get("RUNPEEK_DB"):
-        return Path(os.environ["RUNPEEK_DB"]), None
+        return Path(os.environ["RUNPEEK_DB"]).resolve(), None
     if os.environ.get("NEMULAI_DB"):
-        return Path(os.environ["NEMULAI_DB"]), "using $NEMULAI_DB (legacy name; set RUNPEEK_DB instead)"
+        return Path(os.environ["NEMULAI_DB"]).resolve(), "using $NEMULAI_DB (legacy name; set RUNPEEK_DB instead)"
     if not DEFAULT_DB.exists() and LEGACY_DB.exists():
-        return LEGACY_DB, (f"using legacy store {LEGACY_DB} — move it to {DEFAULT_DB} to silence this"
-                           " (docs/MIGRATION.md)")
+        return LEGACY_DB.resolve(), (f"using legacy store {LEGACY_DB} — move it to {DEFAULT_DB} to silence this"
+                                     " (docs/MIGRATION.md)")
     if DEFAULT_DB.exists():
-        return DEFAULT_DB, None
+        return DEFAULT_DB.resolve(), None
     return user_db(), None
+
+
+def resolve_user_db(explicit: str | None) -> Path:
+    """The shared user-level store for the receiver, the MCP server and setup: never the
+    directory-relative per-project store, which would split data by working directory."""
+    if explicit:
+        return Path(explicit).resolve()
+    if os.environ.get("RUNPEEK_DB"):
+        return Path(os.environ["RUNPEEK_DB"]).resolve()
+    return user_db()
 
 
 def user_db() -> Path:
     """The user-level store shared by the telemetry receiver, the MCP server and the CLI."""
     home = os.environ.get("RUNPEEK_HOME")
-    return (Path(home) if home else Path.home() / ".runpeek") / "runpeek.db"
+    return ((Path(home) if home else Path.home() / ".runpeek") / "runpeek.db").resolve()
 
 
 def _db(args: argparse.Namespace) -> Path:
@@ -335,8 +345,8 @@ def cmd_reprice(args: argparse.Namespace) -> int:
 # ----------------------------------------------------------------------------- agent observer
 
 
-def _open_or_create(args: argparse.Namespace) -> sqlite3.Connection:
-    path = _db(args)
+def _open_or_create(args: argparse.Namespace, *, user_level: bool = False) -> sqlite3.Connection:
+    path = resolve_user_db(getattr(args, "db", None)) if user_level else _db(args)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(path.parent, 0o700)
@@ -557,7 +567,7 @@ def cmd_work_suggest(args: argparse.Namespace) -> int:
 def cmd_agents(args: argparse.Namespace) -> int:
     from . import connectors, telemetry
 
-    conn = _open_or_create(args)
+    conn = _open_or_create(args, user_level=True)
     if args.agents_command == "status":
         print(connectors.render_status(connectors.detect(conn), telemetry.receiver_alive(conn)))
         return 0
@@ -582,8 +592,8 @@ def cmd_agents(args: argparse.Namespace) -> int:
 def cmd_telemetry(args: argparse.Namespace) -> int:
     from . import connectors, telemetry
 
-    conn = _open_or_create(args)
-    db = _db(args)
+    conn = _open_or_create(args, user_level=True)
+    db = resolve_user_db(getattr(args, "db", None))
     if args.telemetry_command == "serve":
         port = args.port or telemetry.receiver_port(conn)
         conn.close()
@@ -624,9 +634,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
     from . import connectors, telemetry
     from .agents.ingest import ADAPTERS, Ingestor
 
-    conn = _open_or_create(args)
+    conn = _open_or_create(args, user_level=True)
+    db = resolve_user_db(getattr(args, "db", None))
     statuses = connectors.detect(conn)
-    print("RunPeek setup — local only. Nothing leaves this machine.\n")
+    print(f"RunPeek setup — local only. Nothing leaves this machine. Store: {db}\n")
     print(connectors.render_status(statuses, telemetry.receiver_alive(conn)))
     print()
     print("Collected: model names, token counts, agent-reported cost, session/request ids, tool names, relative"
@@ -661,7 +672,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             print("Receiver not started (--no-service). Run: runpeek telemetry serve")
         else:
             try:
-                svc = telemetry.install_service(connectors.runpeek_command(), _db(args), port)
+                svc = telemetry.install_service(connectors.runpeek_command(), db, port)
                 print("Background receiver: " + svc)
             except RuntimeError as exc:
                 print(f"Background receiver not installed ({exc}). Run: runpeek telemetry serve")

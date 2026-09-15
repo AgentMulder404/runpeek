@@ -32,13 +32,19 @@ def test_legacy_store_is_used_in_place_not_recreated(tmp_path: Path, monkeypatch
     monkeypatch.delenv("NEMULAI_DB", raising=False)
     monkeypatch.setenv("RUNPEEK_HOME", str(tmp_path / "home"))
     assert resolve_db(None) == (tmp_path / "home" / "runpeek.db", None)  # nothing exists yet → user-level store
+    from runpeek.cli import resolve_user_db
+
+    assert resolve_user_db(None) == tmp_path / "home" / "runpeek.db" and resolve_user_db(None).is_absolute()
     LEGACY_DB.parent.mkdir()
     LEGACY_DB.write_bytes(b"")
     path, note = resolve_db(None)
-    assert path == LEGACY_DB and note and "legacy store" in note and "MIGRATION" in note
+    assert path == LEGACY_DB.resolve() and note and "legacy store" in note and "MIGRATION" in note
     DEFAULT_DB.parent.mkdir()
     DEFAULT_DB.write_bytes(b"")
-    assert resolve_db(None) == (DEFAULT_DB, None)  # once the new store exists it wins
+    assert resolve_db(None) == (DEFAULT_DB.resolve(), None)  # once the new store exists it wins (absolute)
+    assert resolve_db(None)[0].is_absolute()
+    # the receiver, MCP server and setup ignore the per-project store: one shared user-level ledger
+    assert resolve_user_db(None) == tmp_path / "home" / "runpeek.db"
     assert resolve_db("/explicit.db") == (Path("/explicit.db"), None)
     monkeypatch.setenv("NEMULAI_DB", "/env-legacy.db")
     path, note = resolve_db(None)
